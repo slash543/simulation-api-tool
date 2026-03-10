@@ -1,0 +1,42 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment / secrets
+.env
+.env.librechat
+
+# Runtime output
+runs/
+logs/
+mlruns/
+data/raw/
+data/datasets/
+models/
+*.xplt
+*.feb.bak
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor / IDE
+.vscode/settings.json
+.idea/
+
+# Claude Code internal
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# FEBio auto-save temp files
+~*

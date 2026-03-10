@@ -1,0 +1,206 @@
+# =============================================================================
+# docker-compose.librechat.yml — Full integrated stack
+#
+# Services added on top of docker-compose.yml:
+#   ollama              — Ollama LLM runtime (qwen2.5:7b by default)
+#   ollama-init         — one-shot: pulls the LLM model at first start
+#   mcp-server          — FastMCP SSE bridge (simulation tools → LLM)
+#   librechat-mongodb   — MongoDB for LibreChat conversation history
+#   librechat-meilisearch — Meilisearch for full-text search
+#   librechat           — LibreChat web UI (port 3080)
+#
+# First-time setup:
+#   1. cp .env.librechat.example .env.librechat
+#   2. Edit .env.librechat and replace every CHANGE_ME_* value:
+#        openssl rand -hex 32   → JWT_SECRET, JWT_REFRESH_SECRET, CREDS_KEY
+#        openssl rand -hex 16   → CREDS_IV
+#        openssl rand -hex 24   → MEILI_MASTER_KEY
+#   3. Build and start the full stack:
+#        docker compose -f docker-compose.librechat.yml up --build
+#   4. Open http://localhost:3080, register an account, go to Agents,
+#      create a "Simulation Assistant" agent (see README for details).
+#
+# GPU acceleration (Ollama):
+#   Uncomment the `deploy` block inside the `ollama` service below.
+#
+# Swap the LLM:
+#   Change the model name in the `ollama-init` command and in librechat.yaml.
+#   Recommended models with tool-calling support:
+#     qwen2.5:7b   (default, 4.7 GB)
+#     qwen2.5:14b  (better quality, 9 GB)
+#     llama3.1:8b  (Meta, 4.7 GB)
+#     qwen2.5:3b   (lightweight, 2 GB)
+#
+# Make it portable:
+#   The mcp-server container is the only piece that knows about the FastAPI
+#   URLs.  To connect a different chat UI (GitHub Copilot, Claude Desktop, …)
+#   just point its MCP config at http://<host>:8001/sse.
+# =============================================================================
+
+include:
+  - path: docker-compose.yml
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Ollama — local LLM runtime
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    # ── GPU support (NVIDIA) — uncomment to enable ───────────────────────────
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # ollama-init — pull the LLM model on first start
+  #
+  # Runs once, pulls qwen2.5:7b from the Ollama registry, then exits.
+  # The model is cached in the ollama_data volume so subsequent starts are fast.
+  # ---------------------------------------------------------------------------
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling qwen2.5:7b (this may take several minutes on first run)..."
+        ollama pull qwen2.5:7b
+        echo "Model pull complete."
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # MCP Server — exposes simulation tools to LLM clients via SSE
+  # ---------------------------------------------------------------------------
+  mcp-server:
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    image: digital-twin-ui:mcp-server
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      SIMULATION_API_URL: "http://api:8000/api/v1"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8001"
+      # Timeout (seconds) for individual HTTP calls to the simulation API.
+      # Set high because FEBio simulations can take several minutes.
+      HTTP_TIMEOUT: "360"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex(('localhost',8001)); s.close(); exit(r)\""
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # LibreChat — MongoDB (conversation history, users, presets)
+  # ---------------------------------------------------------------------------
+  librechat-mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # LibreChat — Meilisearch (full-text search over conversations)
+  # ---------------------------------------------------------------------------
+  librechat-meilisearch:
+    # IMPORTANT: stay on v1.7.3 — Meilisearch v1.19+ moved to a non-MIT license.
+    # See LICENSES.md before upgrading.
+    image: getmeili/meilisearch:v1.7.3
+    restart: unless-stopped
+    volumes:
+      - meilisearch_data:/meili_data
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY: "${MEILI_MASTER_KEY:-insecure-dev-key-change-in-production}"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget --no-verbose --tries=1 --spider http://localhost:7700/health || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # LibreChat — web UI
+  # ---------------------------------------------------------------------------
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    volumes:
+      # Application config (Ollama endpoint + MCP server definition)
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      # Persistent storage for uploaded images and server logs
+      - librechat_images:/app/client/public/images
+      - librechat_logs:/app/api/logs
+    env_file:
+      - .env.librechat
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3080"
+      MONGO_URI: "mongodb://librechat-mongodb:27017/LibreChat"
+      MEILI_HOST: "http://librechat-meilisearch:7700"
+    depends_on:
+      librechat-mongodb:
+        condition: service_healthy
+      librechat-meilisearch:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget --no-verbose --tries=1 --spider http://localhost:3080/ || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+
+# ---------------------------------------------------------------------------
+# Additional named volumes (base stack volumes are declared in docker-compose.yml)
+# ---------------------------------------------------------------------------
+volumes:
+  ollama_data:
+  mongodb_data:
+  meilisearch_data:
+  librechat_images:
+  librechat_logs:

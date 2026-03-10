@@ -1,0 +1,61 @@
+# =============================================================================
+# docker-compose.override.yml — development overrides
+#
+# This file is automatically merged with docker-compose.yml when you run
+# `docker compose up` locally.  It is NOT used in production (CI/CD should
+# use docker-compose.yml directly with --file).
+#
+# Changes from production:
+#   - Source code is bind-mounted (hot-reload with --reload)
+#   - Uvicorn runs with --reload for instant code changes
+#   - Ports are forwarded for direct access
+#   - Log level raised to DEBUG
+#   - Celery worker uses --loglevel=debug
+# =============================================================================
+
+services:
+
+  api:
+    build:
+      context: .
+      target: api
+    volumes:
+      # Live-reload: mount source over the image copy
+      - ./digital_twin_ui:/app/digital_twin_ui:ro
+      - ./config:/app/config:ro
+      - ./templates:/app/templates:ro
+      - runs_data:/app/runs
+      - logs_data:/app/logs
+      - datasets_data:/app/data
+      - models_data:/app/models
+    environment:
+      DTUI__API__LOG_LEVEL: "debug"
+      DTUI__LOGGING__LEVEL: "DEBUG"
+    command: >
+      uvicorn digital_twin_ui.app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --log-level debug
+
+  worker:
+    build:
+      context: .
+      target: worker
+    volumes:
+      - ./digital_twin_ui:/app/digital_twin_ui:ro
+      - ./config:/app/config:ro
+      - ./templates:/app/templates:ro
+      - runs_data:/app/runs
+      - logs_data:/app/logs
+      - datasets_data:/app/data
+      - models_data:/app/models
+    environment:
+      DTUI__LOGGING__LEVEL: "DEBUG"
+    command: >
+      celery
+      --app digital_twin_ui.tasks.celery_app:celery_app
+      worker
+      --loglevel=debug
+      --concurrency=1
+      --queues=celery

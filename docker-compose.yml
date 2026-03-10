@@ -1,0 +1,165 @@
+# =============================================================================
+# Digital Twin UI — docker-compose stack
+#
+# Services:
+#   redis     — Celery broker + result backend
+#   api       — FastAPI / Uvicorn (port 8000)
+#   worker    — Celery worker (concurrency=1, runs FEBio simulations)
+#   mlflow    — MLflow tracking server (port 5000)
+#   flower    — Celery monitoring UI (port 5555)  [profile: monitoring]
+#
+# Quick start:
+#   docker compose up --build
+#
+# With monitoring:
+#   docker compose --profile monitoring up --build
+#
+# Environment overrides (create a .env file or export before running):
+#   DTUI__SIMULATION__SIMULATOR_EXECUTABLE=febio4
+#   DTUI__API__PORT=8000
+#   SECRET_KEY=change-me-in-production
+# =============================================================================
+
+x-app-env: &app-env
+  PYTHONUNBUFFERED: "1"
+  # Celery broker/backend — point at the redis service
+  DTUI__CELERY__BROKER_URL: "redis://redis:6379/0"
+  DTUI__CELERY__RESULT_BACKEND: "redis://redis:6379/0"
+  # MLflow — write to a shared volume; server reads from same path
+  DTUI__MLFLOW__TRACKING_URI: "http://mlflow:5000"
+
+x-app-volumes: &app-volumes
+  - runs_data:/app/runs
+  - logs_data:/app/logs
+  - datasets_data:/app/data
+  - models_data:/app/models
+  - templates_data:/app/templates
+  # The FEBio binary must be bind-mounted from the host:
+  # - /usr/local/bin/febio4:/usr/local/bin/febio4:ro
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Redis — broker and result backend for Celery
+  # ---------------------------------------------------------------------------
+  redis:
+    # IMPORTANT: stay on redis:7-alpine — Redis 8+ switched to RSAL (non-OSI).
+    # See LICENSES.md for details before upgrading.
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # MLflow — experiment tracking server
+  # ---------------------------------------------------------------------------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.2
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlruns
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri /mlruns
+      --default-artifact-root /mlruns
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # API — FastAPI / Uvicorn
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      target: api
+    image: digital-twin-ui:api
+    restart: unless-stopped
+    ports:
+      - "${DTUI__API__PORT:-8000}:8000"
+    environment:
+      <<: *app-env
+    volumes: *app-volumes
+    depends_on:
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Worker — Celery worker (runs FEBio simulations, extractions, training)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      target: worker
+    image: digital-twin-ui:worker
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      # Solver executable — override if your binary has a different name
+      DTUI__SIMULATION__SIMULATOR_EXECUTABLE: "${FEBIO_EXECUTABLE:-febio4}"
+    volumes:
+      - *app-volumes
+      # Uncomment to bind-mount the FEBio binary from the host:
+      # - ${FEBIO_BIN_PATH:-/usr/local/bin/febio4}:/usr/local/bin/febio4:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Workers run as appuser; the solver binary must be executable by that user
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 8G
+
+  # ---------------------------------------------------------------------------
+  # Flower — Celery task monitoring UI  [optional: --profile monitoring]
+  # ---------------------------------------------------------------------------
+  flower:
+    image: mher/flower:2.0
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    environment:
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      FLOWER_PORT: "5555"
+    depends_on:
+      - redis
+    command: >
+      celery
+      --broker=redis://redis:6379/0
+      flower
+      --port=5555
+
+volumes:
+  redis_data:
+  mlflow_data:
+  runs_data:
+  logs_data:
+  datasets_data:
+  models_data:
+  templates_data:

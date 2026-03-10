@@ -1,0 +1,58 @@
+# Digital Twin UI — Simulation Configuration
+# All paths are relative to the project root unless absolute
+
+simulation:
+  base_feb_path: "templates/sample_catheterization.feb"
+  simulator_executable: "febio4"   # run command: febio4 -i <input.feb>  (single processor)
+  simulator_args: ["-i"]            # args injected between executable and input file path
+  runs_dir: "runs"
+  timeout_seconds: 3600
+
+  # Insertion mechanics
+  displacement_mm: 10.0          # prescribed displacement per step (mm)
+  num_steps: 2                   # number of analysis steps in FEB file
+  step1_duration_s: 2.0          # duration of Step 1 (clamping / ramp-in), fixed
+  default_step_size: 0.05        # solver step size (s) — kept fixed when modifying
+  insertion_step_id: 2           # which step controls insertion (Step2)
+
+  # Loadcurve LC1 structure in the base FEB:
+  #   point 0: (step1_start_t, 0)  e.g. (2.0, 0)
+  #   point 1: (step1_start_t + insertion_duration, 1)
+  loadcurve_start_time: 2.0      # global time at which insertion begins (end of Step1)
+  loadcurve_id: 1                # the id of the load controller to modify
+
+doe:
+  speed_min_mm_s: 4.0
+  speed_max_mm_s: 6.0
+  default_sampler: "lhs"         # lhs | sobol | uniform
+  default_num_samples: 10
+
+mlflow:
+  tracking_uri: "mlruns"
+  experiment_name: "catheter_insertion"
+
+ml:
+  hidden_dims: [64, 128, 256]
+  learning_rate: 0.001
+  batch_size: 32
+  max_epochs: 500
+  patience: 20                   # early stopping patience
+  val_fraction: 0.2
+  checkpoint_dir: "models"
+  dataset_path: "data/datasets/catheter_dataset.parquet"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "info"
+
+celery:
+  broker_url: "redis://localhost:6379/0"
+  result_backend: "redis://localhost:6379/0"
+
+logging:
+  level: "DEBUG"
+  format: "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{function}:{line} - {message}"
+  rotation: "10 MB"
+  retention: "1 week"
+  log_dir: "logs"

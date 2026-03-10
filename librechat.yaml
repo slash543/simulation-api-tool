@@ -1,0 +1,105 @@
+# =============================================================================
+# librechat.yaml — Digital Twin Simulation Assistant
+#
+# LibreChat application configuration.
+# Mount this file at /app/librechat.yaml inside the librechat container.
+#
+# Docs: https://www.librechat.ai/docs/configuration/librechat_yaml
+# =============================================================================
+
+version: 1.1.8
+cache: true
+
+# ---------------------------------------------------------------------------
+# Interface
+# ---------------------------------------------------------------------------
+interface:
+  endpointsMenu: true
+  modelSelect: true
+  parameters: true
+  sidePanel: true
+  presets: true
+
+# ---------------------------------------------------------------------------
+# LLM Endpoints
+# ---------------------------------------------------------------------------
+endpoints:
+  custom:
+    # ── Ollama — primary endpoint for the simulation agent ─────────────────
+    # qwen2.5:7b is recommended: strong tool-calling, 4.7 GB RAM, fast.
+    # Alternatives (swap in the 'default' list):
+    #   qwen2.5:14b  — higher quality, needs ~9 GB RAM
+    #   llama3.1:8b  — also good tool calling
+    #   qwen2.5:3b   — lightweight for resource-constrained hosts
+    - name: "Simulation Agent (Ollama)"
+      apiKey: "ollama"
+      baseURL: "http://ollama:11434/v1/"
+      models:
+        default:
+          - "qwen2.5:7b"
+        fetch: false
+      titleConvo: true
+      titleModel: "qwen2.5:7b"
+      summarize: false
+      modelDisplayLabel: "Ollama"
+      dropParams:
+        - "user"
+      addParams:
+        stream: true
+
+# ---------------------------------------------------------------------------
+# MCP Servers  (tools available to LibreChat Agents)
+# ---------------------------------------------------------------------------
+mcpServers:
+  simulation-tools:
+    type: sse
+    url: "http://mcp-server:8001/sse"
+    # timeout for individual tool calls (ms) — simulations can take ~5 min
+    timeout: 360000
+    # timeout for initial handshake with MCP server (ms)
+    initTimeout: 30000
+
+# ---------------------------------------------------------------------------
+# Model-spec defaults
+# ---------------------------------------------------------------------------
+modelSpecs:
+  enforce: false
+  prioritize: true
+  list:
+    - name: "Simulation Assistant"
+      label: "Digital Twin Simulation Assistant"
+      preset:
+        endpoint: "Simulation Agent (Ollama)"
+        model: "qwen2.5:7b"
+        temperature: 0.2
+        max_tokens: 4096
+        system: |
+          You are an expert digital twin simulation assistant for catheter insertion
+          biomechanics.  You have access to tools that connect to a FEBio finite-element
+          simulation pipeline and a trained machine-learning model.
+
+          WHAT YOU CAN DO
+          ──────────────
+          • Run individual FEBio simulations at a specified insertion speed
+          • Execute Design-of-Experiments (DOE) campaigns to build synthetic datasets
+          • Predict contact pressure instantly using the trained neural network
+          • Poll the status of background jobs
+
+          SIMULATION CONTEXT
+          ──────────────────
+          • The model simulates catheter insertion into a vascular structure
+          • Key output: peak contact pressure (Pa) at the catheter–tissue interface
+          • Typical insertion speeds: 2–10 mm/s
+          • FEM simulations take 1–5 minutes; ML predictions are instant
+
+          WORKFLOW GUIDANCE
+          ─────────────────
+          1. Single-speed query → use predict_pressure() for speed, or run_simulation()
+             for high-fidelity FEM results.
+          2. Build a synthetic database → run_doe_campaign(n_samples, speed_min, speed_max).
+             Poll get_doe_status() until complete.
+          3. Compare FEM vs ML → run both and discuss the agreement.
+
+          Always present pressures with units (Pa or kPa) and interpret results
+          clinically (contact pressure relevance to tissue trauma, safe speed ranges, etc.).
+          Be concise, technical, and cite the simulation run_id when available.
