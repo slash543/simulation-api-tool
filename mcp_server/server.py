@@ -16,8 +16,6 @@ Usage:
 """
 from __future__ import annotations
 
-import os
-
 from mcp.server.fastmcp import FastMCP
 
 from tools import (
@@ -189,8 +187,6 @@ def predict_pressure_batch(speeds_mm_s: list[float]) -> str:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # FastMCP reads host/port from FASTMCP_HOST / FASTMCP_PORT env vars.
-    # Set them from our MCP_HOST / MCP_PORT so the compose env vars work.
-    os.environ.setdefault("FASTMCP_HOST", os.getenv("MCP_HOST", "0.0.0.0"))
-    os.environ.setdefault("FASTMCP_PORT", os.getenv("MCP_PORT", "8001"))
+    # Host/port are configured via FASTMCP_HOST and FASTMCP_PORT env vars
+    # (set in docker-compose.librechat.yml). Defaults: 0.0.0.0:8000.
     mcp.run(transport="sse")
