@@ -121,10 +121,9 @@ services:
       <<: *app-env
       # Solver executable — override if your binary has a different name
       DTUI__SIMULATION__SIMULATOR_EXECUTABLE: "${FEBIO_EXECUTABLE:-febio4}"
-    volumes:
-      - *app-volumes
-      # Uncomment to bind-mount the FEBio binary from the host:
-      # - ${FEBIO_BIN_PATH:-/usr/local/bin/febio4}:/usr/local/bin/febio4:ro
+    # To also bind-mount the FEBio binary, replace `volumes: *app-volumes` with
+    # an explicit list that adds the binary mount at the end.
+    volumes: *app-volumes
     depends_on:
       redis:
         condition: service_healthy
