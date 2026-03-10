@@ -5,6 +5,10 @@
 # Mount this file at /app/librechat.yaml inside the librechat container.
 #
 # Docs: https://www.librechat.ai/docs/configuration/librechat_yaml
+#
+# LLM Priority:
+#   Primary  — Azure OpenAI (gpt-4o) when AZURE_OPENAI_API_KEY is set
+#   Fallback — Ollama (qwen2.5:7b) always available on the local network
 # =============================================================================
 
 version: 1.1.8
@@ -24,14 +28,27 @@ interface:
 # LLM Endpoints
 # ---------------------------------------------------------------------------
 endpoints:
+
+  # ── Azure OpenAI — primary endpoint (requires AZURE_OPENAI_* vars in .env.librechat)
+  azureOpenAI:
+    titleConvo: true
+    titleModel: "${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o}"
+    # Suppress the endpoint in the UI if the key is not configured
+    # (LibreChat will still list it but calls will fail gracefully)
+    groups:
+      - group: "digital-twin-azure"
+        apiKey: "${AZURE_OPENAI_API_KEY}"
+        instanceName: "${AZURE_OPENAI_INSTANCE_NAME}"
+        version: "${AZURE_OPENAI_API_VERSION:-2024-02-15-preview}"
+        models:
+          gpt-4o:
+            deploymentName: "${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o}"
+          gpt-4o-mini:
+            deploymentName: "${AZURE_OPENAI_MINI_DEPLOYMENT_NAME:-gpt-4o-mini}"
+
+  # ── Ollama — fallback endpoint (always available, no API key needed)
   custom:
-    # ── Ollama — primary endpoint for the simulation agent ─────────────────
-    # qwen2.5:7b is recommended: strong tool-calling, 4.7 GB RAM, fast.
-    # Alternatives (swap in the 'default' list):
-    #   qwen2.5:14b  — higher quality, needs ~9 GB RAM
-    #   llama3.1:8b  — also good tool calling
-    #   qwen2.5:3b   — lightweight for resource-constrained hosts
-    - name: "Simulation Agent (Ollama)"
+    - name: "Ollama (local)"
       apiKey: "ollama"
       baseURL: "http://ollama:11434/v1/"
       models:
@@ -67,20 +84,22 @@ mcpSettings:
     - "mcp-server:8001"
 
 # ---------------------------------------------------------------------------
-# Model-spec defaults
+# Model Specs — Simulation Assistant (Azure primary, Ollama fallback)
 # ---------------------------------------------------------------------------
 modelSpecs:
   enforce: false
   prioritize: true
   list:
-    - name: "Simulation Assistant"
-      label: "Digital Twin Simulation Assistant"
+
+    # ── Primary: Azure OpenAI (gpt-4o) ──────────────────────────────────────
+    - name: "SimAssistant-Azure"
+      label: "Simulation Assistant (Azure OpenAI)"
       preset:
-        endpoint: "Simulation Agent (Ollama)"
-        model: "qwen2.5:7b"
+        endpoint: "azureOpenAI"
+        model: "gpt-4o"
         temperature: 0.2
         max_tokens: 4096
-        system: |
+        system: &simulation_system_prompt |
           You are an expert digital twin simulation assistant for catheter insertion
           biomechanics.  You have access to tools that connect to a FEBio finite-element
           simulation pipeline and a trained machine-learning model.
@@ -120,3 +139,13 @@ modelSpecs:
           Always present pressures with units (Pa or kPa) and interpret results
           clinically (contact pressure relevance to tissue trauma, safe speed ranges, etc.).
           Be concise, technical, and cite the simulation run_id when available.
+
+    # ── Fallback: Ollama / qwen2.5:7b ───────────────────────────────────────
+    - name: "SimAssistant-Ollama"
+      label: "Simulation Assistant (Ollama — fallback)"
+      preset:
+        endpoint: "Ollama (local)"
+        model: "qwen2.5:7b"
+        temperature: 0.2
+        max_tokens: 4096
+        system: *simulation_system_prompt

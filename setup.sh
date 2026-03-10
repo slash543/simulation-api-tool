@@ -171,7 +171,7 @@ upsert_env "RUNS_HOST_PATH" "$RUNS_HOST_PATH"
 info "  Runs folder created at: $RUNS_HOST_PATH"
 
 # ---------------------------------------------------------------------------
-# 4. Generate LibreChat secrets
+# 4. Generate LibreChat secrets + Azure OpenAI config
 # ---------------------------------------------------------------------------
 section "Generating LibreChat secrets"
 
@@ -199,6 +199,28 @@ else
         ".env.librechat.example" > "$LIBRECHAT_ENV"
 
     info "Generated $LIBRECHAT_ENV with fresh secrets"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Azure OpenAI configuration (optional but recommended)
+# ---------------------------------------------------------------------------
+section "Azure OpenAI configuration"
+
+if grep -q "^AZURE_OPENAI_API_KEY=." "$LIBRECHAT_ENV" 2>/dev/null; then
+    info "Azure OpenAI key already set in $LIBRECHAT_ENV"
+else
+    warn "Azure OpenAI is not configured. Ollama (local) will be used as the LLM."
+    warn "To enable Azure OpenAI (recommended for production):"
+    warn "  Edit $LIBRECHAT_ENV and fill in:"
+    warn "    AZURE_OPENAI_API_KEY=<your key>"
+    warn "    AZURE_OPENAI_INSTANCE_NAME=<resource name, e.g. my-openai-resource>"
+    warn "    AZURE_OPENAI_DEPLOYMENT_NAME=<deployment name, e.g. gpt-4o>"
+    warn "    AZURE_OPENAI_MINI_DEPLOYMENT_NAME=<mini deployment, e.g. gpt-4o-mini>"
+    warn "    AZURE_OPENAI_API_VERSION=2024-02-15-preview"
+    warn ""
+    warn "  Find these values in:"
+    warn "    Azure Portal → your OpenAI resource → Keys and Endpoint"
+    warn "    Azure Portal → your OpenAI resource → Model deployments"
 fi
 
 # ---------------------------------------------------------------------------
@@ -251,6 +273,16 @@ ${BOLD}IF A PORT IS BUSY${NC}
      sudo kill -9 <PID>
    Or kill by port directly:
      sudo fuser -k <port>/tcp
+
+${BOLD}LLM OPTIONS${NC}
+   Azure OpenAI (recommended):
+     Edit .env.librechat and set AZURE_OPENAI_API_KEY + AZURE_OPENAI_INSTANCE_NAME
+     + AZURE_OPENAI_DEPLOYMENT_NAME. Use the "Simulation Assistant (Azure OpenAI)"
+     model spec in LibreChat. Faster, no GPU needed.
+
+   Ollama fallback (always available):
+     No config needed. Use "Simulation Assistant (Ollama — fallback)".
+     First run downloads qwen2.5:7b (4.7 GB) — wait for ollama-init to finish.
 
 ${BOLD}TROUBLESHOOTING${NC}
    • "Ollama not found" in LibreChat → model is still downloading.
