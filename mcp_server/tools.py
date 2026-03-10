@@ -16,6 +16,23 @@ import httpx
 API_BASE: str = os.getenv("SIMULATION_API_URL", "http://api:8000/api/v1")
 HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "300"))
 
+# Host-side path to the runs directory (Docker volume mount point on the host).
+# Used to translate container-internal /app/runs/... paths to host paths so
+# users can open result files directly in FEBio Studio.
+RUNS_HOST_PATH: str = os.getenv(
+    "RUNS_HOST_PATH",
+    "/home/anukaran/simulation-api-tool/runs",
+)
+_CONTAINER_RUNS_PREFIX = "/app/runs"
+
+
+def _to_host_path(container_path: str) -> str:
+    """Translate a container-internal path under /app/runs to the host path."""
+    if container_path.startswith(_CONTAINER_RUNS_PREFIX):
+        relative = container_path[len(_CONTAINER_RUNS_PREFIX):]
+        return RUNS_HOST_PATH.rstrip("/") + relative
+    return container_path
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -51,18 +68,35 @@ def tool_health_check() -> str:
 
 def tool_run_simulation(speed_mm_s: float) -> str:
     """
-    Run a FEBio catheter-insertion simulation synchronously.
+    Submit a FEBio catheter-insertion simulation and return IMMEDIATELY.
 
-    Blocks until the simulation completes (typically 1–5 min).
-    Returns run_id, speed_mm_s, peak_contact_pressure_pa, duration_s and status.
+    Does NOT wait for the simulation to finish. The solver runs in the
+    background; results are written to a dedicated folder on the host machine.
+
+    Always tell the user:
+      1. The simulation has been submitted and is running in the background.
+      2. The exact host folder path (host_run_dir) where they can watch for files.
+      3. That results.xplt (host_xplt_path) will appear in that folder when done.
+      4. They can open host_xplt_path in FEBio Studio via File > Open once it appears.
+      5. The log file (host_run_dir/log.txt) shows solver progress in real time.
+
+    Returns: task_id, run_id, host_run_dir, host_xplt_path, status=PENDING.
     """
     try:
         with _client() as c:
-            r = c.post("/simulations/run/sync", json={"speed_mm_s": speed_mm_s})
+            r = c.post("/simulations/run", json={"speed_mm_s": speed_mm_s, "extract": False})
             r.raise_for_status()
-            return _ok(r.json())
+            data = r.json()
+
+        # Translate container paths to host-accessible paths
+        if data.get("xplt_path"):
+            data["host_xplt_path"] = _to_host_path(data["xplt_path"])
+        if data.get("run_dir"):
+            data["host_run_dir"] = _to_host_path(data["run_dir"])
+
+        return _ok(data)
     except httpx.HTTPStatusError as exc:
-        return _err(f"Simulation failed ({exc.response.status_code}): {exc.response.text}")
+        return _err(f"Submit failed ({exc.response.status_code}): {exc.response.text}")
     except httpx.HTTPError as exc:
         return _err(f"Request error: {exc}")
 

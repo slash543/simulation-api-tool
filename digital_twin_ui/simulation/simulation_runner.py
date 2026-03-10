@@ -148,7 +148,6 @@ class SimulationRunner:
     """
 
     _LOG_FILENAME = "log.txt"
-    _XPLT_FILENAME = "results.xplt"
     _INPUT_FILENAME = "input.feb"
     _METADATA_FILENAME = "metadata.json"
 
@@ -203,6 +202,8 @@ class SimulationRunner:
             )
 
         # --- Step 2: write initial metadata (QUEUED) ---
+        # FEBio names the output file after the input file stem (input.feb → input.xplt)
+        xplt_file = run_dir / (input_feb.stem + ".xplt")
         command = self._build_command(input_feb)
         result = RunResult(
             run_id=run_id,
@@ -211,7 +212,7 @@ class SimulationRunner:
             run_dir=run_dir,
             input_feb=input_feb,
             log_file=run_dir / self._LOG_FILENAME,
-            xplt_file=run_dir / self._XPLT_FILENAME,
+            xplt_file=xplt_file,
             metadata_file=run_dir / self._METADATA_FILENAME,
             command=command,
             lc_end_time=cfg_result.lc_end_time,
@@ -395,14 +396,15 @@ class SimulationRunner:
     ) -> RunResult:
         """Build a terminal RunResult for a pre-execution failure."""
         dummy = run_dir / self._METADATA_FILENAME
+        input_feb = run_dir / self._INPUT_FILENAME
         result = RunResult(
             run_id=run_id,
             status=status,
             speed_mm_s=speed_mm_s,
             run_dir=run_dir,
-            input_feb=run_dir / self._INPUT_FILENAME,
+            input_feb=input_feb,
             log_file=run_dir / self._LOG_FILENAME,
-            xplt_file=run_dir / self._XPLT_FILENAME,
+            xplt_file=run_dir / (input_feb.stem + ".xplt"),
             metadata_file=dummy,
             command=[],
             error_message=error,

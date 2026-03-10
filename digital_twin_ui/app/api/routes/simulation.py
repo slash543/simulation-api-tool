@@ -16,6 +16,8 @@ GET  /health                   – health check
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
@@ -37,6 +39,7 @@ from digital_twin_ui.app.api.schemas.simulation import (
 )
 from celery.result import AsyncResult
 
+from digital_twin_ui.app.core.config import get_settings
 from digital_twin_ui.app.core.logging import get_logger
 from digital_twin_ui.extraction.xplt_parser import extract_contact_pressure
 from digital_twin_ui.simulation.simulation_runner import SimulationRunner
@@ -106,27 +109,42 @@ async def submit_simulation(body: SimulationRequest) -> TaskResponse:
     """
     Submit a simulation job to the Celery task queue.
 
-    Returns immediately with a ``task_id`` that can be polled via
+    Returns immediately with a ``task_id``, ``run_id``, and the ``run_dir``
+    path where results will be written. Poll status via
     ``GET /simulations/{task_id}``.
     """
-    logger.info("Submitting simulation", speed_mm_s=body.speed_mm_s)
+    # Generate run_id and pre-create the run directory so the path is known
+    # before the worker starts, allowing callers to watch the folder.
+    cfg = get_settings()
+    run_id = body.run_id or (
+        "run_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        + "_" + uuid.uuid4().hex[:4]
+    )
+    run_dir = cfg.runs_dir_abs / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    xplt_path = run_dir / "input.xplt"
+
+    logger.info("Submitting simulation", speed_mm_s=body.speed_mm_s, run_id=run_id)
 
     if body.extract:
         task = run_full_pipeline_task.delay(
             speed_mm_s=body.speed_mm_s,
-            run_id=body.run_id,
+            run_id=run_id,
             log_mlflow=body.log_mlflow,
         )
     else:
         task = run_simulation_task.delay(
             speed_mm_s=body.speed_mm_s,
-            run_id=body.run_id,
+            run_id=run_id,
         )
 
     return TaskResponse(
         task_id=task.id,
         status="PENDING",
         message=f"Simulation queued for speed={body.speed_mm_s} mm/s",
+        run_id=run_id,
+        run_dir=str(run_dir),
+        xplt_path=str(xplt_path),
     )
 
 
@@ -147,7 +165,7 @@ async def run_simulation_sync(body: SimulationRequest) -> SimulationResultRespon
     """
     logger.info("Running simulation synchronously", speed_mm_s=body.speed_mm_s)
     runner = SimulationRunner()
-    result = runner.run(speed_mm_s=body.speed_mm_s, run_id=body.run_id)
+    result = await runner.run_async(speed_mm_s=body.speed_mm_s, run_id=body.run_id)
 
     extraction_dict = None
     if body.extract and result.succeeded and result.xplt_file.exists():
@@ -180,6 +198,8 @@ async def run_simulation_sync(body: SimulationRequest) -> SimulationResultRespon
         error_message=result.error_message,
         extraction=extraction_dict,
         mlflow_run_id=mlflow_run_id,
+        run_dir=str(result.run_dir),
+        xplt_path=str(result.xplt_file),
     )
 
 

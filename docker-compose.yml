@@ -29,13 +29,19 @@ x-app-env: &app-env
   DTUI__MLFLOW__TRACKING_URI: "http://mlflow:5000"
 
 x-app-volumes: &app-volumes
-  - runs_data:/app/runs
+  - ${RUNS_HOST_PATH:-./runs}:/app/runs
   - logs_data:/app/logs
   - datasets_data:/app/data
   - models_data:/app/models
   - templates_data:/app/templates
-  # The FEBio binary must be bind-mounted from the host:
-  # - /usr/local/bin/febio4:/usr/local/bin/febio4:ro
+  # FEBio: wrapper script (sets LD_LIBRARY_PATH only for febio4 process)
+  - ./scripts/febio4_wrapper.sh:/usr/local/bin/febio4:ro
+  # FEBio real binary — called by the wrapper
+  - ${FEBIO_BINARY_PATH:-/opt/febio/bin/febio4}:/opt/febio/bin/febio4:ro
+  # FEBio config file — febio.xml must sit alongside the binary
+  - ${FEBIO_XML_PATH:-/opt/febio/bin/febio.xml}:/opt/febio/bin/febio.xml:ro
+  # FEBio shared libraries — required by the binary at runtime
+  - ${FEBIO_LIB_PATH:-/opt/febio/lib}:/opt/febio/lib:ro
 
 services:
 
@@ -157,7 +163,6 @@ services:
 volumes:
   redis_data:
   mlflow_data:
-  runs_data:
   logs_data:
   datasets_data:
   models_data:

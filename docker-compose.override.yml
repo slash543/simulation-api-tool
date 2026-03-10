@@ -24,7 +24,7 @@ services:
       - ./digital_twin_ui:/app/digital_twin_ui:ro
       - ./config:/app/config:ro
       - ./templates:/app/templates:ro
-      - runs_data:/app/runs
+      - ${RUNS_HOST_PATH:-./runs}:/app/runs
       - logs_data:/app/logs
       - datasets_data:/app/data
       - models_data:/app/models
@@ -46,7 +46,7 @@ services:
       - ./digital_twin_ui:/app/digital_twin_ui:ro
       - ./config:/app/config:ro
       - ./templates:/app/templates:ro
-      - runs_data:/app/runs
+      - ${RUNS_HOST_PATH:-./runs}:/app/runs
       - logs_data:/app/logs
       - datasets_data:/app/data
       - models_data:/app/models

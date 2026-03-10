@@ -105,6 +105,9 @@ services:
       # FastMCP reads host/port from these specific env var names
       FASTMCP_HOST: "0.0.0.0"
       FASTMCP_PORT: "8001"
+      # Host-side path to the runs directory — shown to users so they can
+      # open result files in FEBio Studio without needing docker exec.
+      RUNS_HOST_PATH: "${RUNS_HOST_PATH:-/home/anukaran/simulation-api-tool/runs}"
     depends_on:
       api:
         condition: service_healthy

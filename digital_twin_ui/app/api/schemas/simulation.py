@@ -98,6 +98,18 @@ class TaskResponse(BaseModel):
     task_id: str = Field(..., description="Celery task identifier.")
     status: str = Field("PENDING", description="Initial task status.")
     message: str = Field("", description="Human-readable status message.")
+    run_id: Optional[str] = Field(
+        None,
+        description="Run identifier — also the name of the result folder.",
+    )
+    run_dir: Optional[str] = Field(
+        None,
+        description="Absolute path to the run directory inside the container.",
+    )
+    xplt_path: Optional[str] = Field(
+        None,
+        description="Expected path to the .xplt results file (written by solver).",
+    )
 
 
 class TaskStatusResponse(BaseModel):
@@ -119,6 +131,14 @@ class SimulationResultResponse(BaseModel):
     error_message: Optional[str] = None
     extraction: Optional[dict[str, Any]] = None
     mlflow_run_id: Optional[str] = None
+    run_dir: Optional[str] = Field(
+        None,
+        description="Absolute path to the run directory inside the container.",
+    )
+    xplt_path: Optional[str] = Field(
+        None,
+        description="Absolute path to the .xplt results file inside the container.",
+    )
 
 
 class PressureResultResponse(BaseModel):
