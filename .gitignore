@@ -21,6 +21,7 @@ data/datasets/
 models/
 *.xplt
 *.feb.bak
+*.feb
 
 # Test / coverage
 .pytest_cache/

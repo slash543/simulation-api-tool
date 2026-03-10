@@ -1,0 +1,10 @@
+name: "sample_catheterization"
+label: "Sample Catheterization (Toy Case)"
+feb_file: "sample_catheterization.feb"
+n_steps: 1
+base_step_size: 0.05
+default_dwell_time_s: 0.0
+displacements_mm: [10.0]
+speed_range:
+  min_mm_s: 4.0
+  max_mm_s: 6.0

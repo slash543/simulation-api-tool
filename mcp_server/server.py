@@ -22,6 +22,7 @@ from tools import (
     tool_get_doe_status,
     tool_get_task_status,
     tool_health_check,
+    tool_list_templates,
     tool_predict_pressure,
     tool_predict_pressure_batch,
     tool_run_doe_campaign,
@@ -117,31 +118,80 @@ def get_task_status(task_id: str) -> str:
 
 
 @mcp.tool()
+def list_templates() -> str:
+    """
+    List all available simulation templates with their configurations.
+
+    Returns a JSON object with a ``templates`` array.  Each entry contains:
+      - name:               Template identifier (use in run_doe_campaign / run_simulation)
+      - label:              Human-readable display name
+      - n_steps:            Number of sequential insertion steps (1 or 10)
+      - speed_range_min/max: Valid insertion speed bounds in mm/s
+      - displacements_mm:   Per-step prescribed displacement magnitudes
+
+    Available templates:
+      - sample_catheterization  — toy 2-step case (backwards compatible)
+      - DT_BT_14Fr_FO_10E_IR12  — 14Fr catheter, 10-step, urethra IR12
+      - DT_BT_14Fr_FO_10E_IR25  — 14Fr catheter, 10-step, urethra IR25
+
+    Returns:
+        JSON with ``templates`` list.
+    """
+    return tool_list_templates()
+
+
+@mcp.tool()
 def run_doe_campaign(
     n_samples: int,
     speed_min: float,
     speed_max: float,
     sampler: str = "lhs",
     seed: int | None = None,
+    template: str = "DT_BT_14Fr_FO_10E_IR12",
+    max_perturbation: float = 0.20,
+    dwell_time_s: float = 1.0,
 ) -> str:
     """
     Submit a Design of Experiments campaign to build a synthetic simulation database.
 
-    Runs `n_samples` simulations sampled across [speed_min, speed_max] using the
-    chosen strategy.  Results are stored for subsequent ML training.
+    For multi-step templates (DT_BT_14Fr_FO_10E_IR12, DT_BT_14Fr_FO_10E_IR25),
+    uses CorrelatedSpeedSampler to generate physiologically plausible per-step
+    speed vectors — each sample has 10 correlated speeds with a random mean and
+    small per-step perturbations sorted ascending to simulate speed ramp-up.
+
+    For sample_catheterization (single-step), uses the standard 1-D scalar sampler.
+
+    Runs `n_samples` simulations and stores results for ML training.
 
     Args:
-        n_samples: Number of simulation points (recommended: 10 – 50).
-        speed_min: Minimum insertion speed in mm/s (e.g. 2.0).
-        speed_max: Maximum insertion speed in mm/s (e.g. 10.0).
-        sampler:   Sampling strategy — 'lhs' (Latin Hypercube, default),
-                   'sobol', or 'uniform'.
-        seed:      Optional integer seed for reproducibility.
+        n_samples:        Number of simulation points (recommended: 10 – 50).
+        speed_min:        Minimum mean insertion speed in mm/s (e.g. 10.0).
+        speed_max:        Maximum mean insertion speed in mm/s (e.g. 25.0).
+        sampler:          Sampling strategy for single-step templates — 'lhs'
+                          (Latin Hypercube, default), 'sobol', or 'uniform'.
+        seed:             Optional integer seed for reproducibility.
+        template:         Template name — use list_templates() to see options.
+                          Default: 'DT_BT_14Fr_FO_10E_IR12'.
+        max_perturbation: Maximum fractional perturbation per step (0.0–0.5).
+                          0.20 means each step speed varies by up to ±20% of
+                          the mean. Only applies to multi-step templates.
+        dwell_time_s:     Dwell time (seconds) appended after each insertion
+                          ramp.  Longer dwell gives the tissue more time to
+                          relax between steps.
 
     Returns:
         JSON with task_id.  Poll with get_doe_status(task_id).
     """
-    return tool_run_doe_campaign(n_samples, speed_min, speed_max, sampler, seed)
+    return tool_run_doe_campaign(
+        n_samples,
+        speed_min,
+        speed_max,
+        sampler,
+        seed,
+        template,
+        max_perturbation,
+        dwell_time_s,
+    )
 
 
 @mcp.tool()

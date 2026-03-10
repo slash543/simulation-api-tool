@@ -3,6 +3,8 @@ FastAPI route handlers for simulation, DOE, extraction, and ML endpoints.
 
 Endpoints
 ---------
+GET  /templates                – list available simulation templates
+GET  /templates/{name}         – get one template's config
 POST /simulations/run          – submit one simulation (async via Celery)
 POST /simulations/run/sync     – run one simulation synchronously (blocking)
 GET  /simulations/{task_id}    – poll Celery task status
@@ -36,6 +38,8 @@ from digital_twin_ui.app.api.schemas.simulation import (
     SimulationResultResponse,
     TaskResponse,
     TaskStatusResponse,
+    TemplateInfo,
+    TemplateListResponse,
 )
 from celery.result import AsyncResult
 
@@ -96,6 +100,68 @@ async def health_check() -> HealthResponse:
 
 
 # ---------------------------------------------------------------------------
+# Template registry endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/templates", response_model=TemplateListResponse, tags=["templates"])
+async def list_templates() -> TemplateListResponse:
+    """
+    Return the list of available simulation templates with their configurations.
+
+    Each template describes a FEB file, its speed range, number of steps, and
+    per-step displacement magnitudes.
+    """
+    from digital_twin_ui.simulation.template_registry import get_template_registry
+
+    registry = get_template_registry()
+    templates = [
+        TemplateInfo(
+            name=tc.name,
+            label=tc.label,
+            n_steps=tc.n_steps,
+            speed_range_min=tc.speed_range.min_mm_s,
+            speed_range_max=tc.speed_range.max_mm_s,
+            displacements_mm=tc.displacements_mm,
+        )
+        for tc in registry.all_configs()
+    ]
+    return TemplateListResponse(templates=templates)
+
+
+@router.get(
+    "/templates/{name}",
+    response_model=TemplateInfo,
+    tags=["templates"],
+)
+async def get_template(name: str) -> TemplateInfo:
+    """
+    Return the configuration for a single simulation template.
+
+    Args:
+        name: Template name (e.g. ``DT_BT_14Fr_FO_10E_IR12``).
+    """
+    from digital_twin_ui.simulation.template_registry import get_template_registry
+    from fastapi import HTTPException
+
+    registry = get_template_registry()
+    try:
+        tc = registry.get(name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+    return TemplateInfo(
+        name=tc.name,
+        label=tc.label,
+        n_steps=tc.n_steps,
+        speed_range_min=tc.speed_range.min_mm_s,
+        speed_range_max=tc.speed_range.max_mm_s,
+        displacements_mm=tc.displacements_mm,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Single simulation — async
 # ---------------------------------------------------------------------------
 
@@ -124,24 +190,35 @@ async def submit_simulation(body: SimulationRequest) -> TaskResponse:
     run_dir.mkdir(parents=True, exist_ok=True)
     xplt_path = run_dir / "input.xplt"
 
-    logger.info("Submitting simulation", speed_mm_s=body.speed_mm_s, run_id=run_id)
+    logger.info(
+        "Submitting simulation",
+        speed_mm_s=body.speed_mm_s,
+        template=body.template,
+        run_id=run_id,
+    )
 
     if body.extract:
         task = run_full_pipeline_task.delay(
             speed_mm_s=body.speed_mm_s,
             run_id=run_id,
             log_mlflow=body.log_mlflow,
+            template=body.template,
+            speeds_mm_s=body.speeds_mm_s,
+            dwell_time_s=body.dwell_time_s,
         )
     else:
         task = run_simulation_task.delay(
             speed_mm_s=body.speed_mm_s,
             run_id=run_id,
+            template=body.template,
+            speeds_mm_s=body.speeds_mm_s,
+            dwell_time_s=body.dwell_time_s,
         )
 
     return TaskResponse(
         task_id=task.id,
         status="PENDING",
-        message=f"Simulation queued for speed={body.speed_mm_s} mm/s",
+        message=f"Simulation queued for template={body.template} speed={body.speed_mm_s} mm/s",
         run_id=run_id,
         run_dir=str(run_dir),
         xplt_path=str(xplt_path),
@@ -163,9 +240,19 @@ async def run_simulation_sync(body: SimulationRequest) -> SimulationResultRespon
 
     Useful for development; use the async endpoint for production.
     """
-    logger.info("Running simulation synchronously", speed_mm_s=body.speed_mm_s)
+    logger.info(
+        "Running simulation synchronously",
+        speed_mm_s=body.speed_mm_s,
+        template=body.template,
+    )
     runner = SimulationRunner()
-    result = await runner.run_async(speed_mm_s=body.speed_mm_s, run_id=body.run_id)
+    result = await runner.run_async(
+        speed_mm_s=body.speed_mm_s,
+        run_id=body.run_id,
+        template=body.template,
+        speeds_mm_s=body.speeds_mm_s,
+        dwell_time_s=body.dwell_time_s,
+    )
 
     extraction_dict = None
     if body.extract and result.succeeded and result.xplt_file.exists():
@@ -244,6 +331,7 @@ async def submit_doe_campaign(body: DOERequest) -> TaskResponse:
         n_samples=body.n_samples,
         speed_min=body.speed_min,
         speed_max=body.speed_max,
+        template=body.template,
     )
 
     task = run_doe_campaign_task.delay(
@@ -254,6 +342,9 @@ async def submit_doe_campaign(body: DOERequest) -> TaskResponse:
         seed=body.seed,
         extract=body.extract,
         log_mlflow=body.log_mlflow,
+        template=body.template,
+        max_perturbation=body.max_perturbation,
+        dwell_time_s=body.dwell_time_s,
     )
 
     return TaskResponse(

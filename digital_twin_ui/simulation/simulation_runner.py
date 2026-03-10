@@ -108,6 +108,10 @@ class RunResult:
     lc_end_time: float | None = None
     time_steps_step2: int | None = None
 
+    # Multi-step fields
+    template_name: str = "sample_catheterization"
+    speeds_mm_s: list[float] | None = None
+
     @property
     def succeeded(self) -> bool:
         return self.status == SimulationStatus.COMPLETED
@@ -164,13 +168,26 @@ class SimulationRunner:
         self,
         speed_mm_s: float,
         run_id: str | None = None,
+        template: str = "sample_catheterization",
+        speeds_mm_s: list[float] | None = None,
+        dwell_time_s: float = 1.0,
     ) -> RunResult:
         """
-        Configure and execute a simulation for *speed_mm_s*.
+        Configure and execute a simulation.
+
+        For single-step templates (``sample_catheterization``), uses the
+        existing :class:`SimulationConfigurator` with *speed_mm_s*.
+
+        For multi-step templates, uses :class:`MultiStepConfigurator`.
+        If *speeds_mm_s* is ``None`` for a multi-step template, *speed_mm_s*
+        is broadcast to all steps.
 
         Args:
-            speed_mm_s: Target insertion speed in mm/s.
-            run_id:     Optional explicit run ID.  Auto-generated if None.
+            speed_mm_s:   Target insertion speed in mm/s (single-step templates).
+            run_id:       Optional explicit run ID.  Auto-generated if None.
+            template:     Template name (must exist in TemplateRegistry).
+            speeds_mm_s:  Per-step speeds for multi-step templates.
+            dwell_time_s: Dwell time per step in seconds.
 
         Returns:
             RunResult — always returned, even on failure or timeout.
@@ -182,16 +199,49 @@ class SimulationRunner:
             "Simulation queued",
             run_id=run_id,
             speed_mm_s=speed_mm_s,
+            template=template,
             run_dir=str(run_dir),
         )
 
         # --- Step 1: configure input file ---
         input_feb = run_dir / self._INPUT_FILENAME
         try:
-            cfg_result = self._configurator.configure(
-                speed_mm_s=speed_mm_s,
-                output_path=input_feb,
-            )
+            lc_end_time: float | None = None
+            time_steps_step2: int | None = None
+            effective_speeds: list[float] | None = None
+
+            if template == "sample_catheterization":
+                cfg_result = self._configurator.configure(
+                    speed_mm_s=speed_mm_s,
+                    output_path=input_feb,
+                )
+                lc_end_time = cfg_result.lc_end_time
+                time_steps_step2 = cfg_result.time_steps_step2
+            else:
+                from digital_twin_ui.simulation.multi_step_configurator import (
+                    MultiStepConfigurator,
+                )
+                from digital_twin_ui.simulation.template_registry import (
+                    get_template_registry,
+                )
+
+                registry = get_template_registry()
+                tc = registry.get(template)
+
+                # Build speeds vector
+                if speeds_mm_s is not None:
+                    step_speeds = list(speeds_mm_s)
+                else:
+                    step_speeds = [speed_mm_s] * tc.n_steps
+
+                ms_configurator = MultiStepConfigurator(tc)
+                ms_result = ms_configurator.configure(
+                    speeds_mm_s=step_speeds,
+                    dwell_time_s=dwell_time_s,
+                    output_path=input_feb,
+                )
+                effective_speeds = ms_result.speeds_mm_s
+
         except Exception as exc:
             return self._fail(
                 run_id=run_id,
@@ -199,6 +249,7 @@ class SimulationRunner:
                 run_dir=run_dir,
                 error=f"Configuration failed: {exc}",
                 status=SimulationStatus.FAILED,
+                template_name=template,
             )
 
         # --- Step 2: write initial metadata (QUEUED) ---
@@ -215,8 +266,10 @@ class SimulationRunner:
             xplt_file=xplt_file,
             metadata_file=run_dir / self._METADATA_FILENAME,
             command=command,
-            lc_end_time=cfg_result.lc_end_time,
-            time_steps_step2=cfg_result.time_steps_step2,
+            lc_end_time=lc_end_time,
+            time_steps_step2=time_steps_step2,
+            template_name=template,
+            speeds_mm_s=effective_speeds,
         )
         self._write_metadata(result)
 
@@ -229,6 +282,9 @@ class SimulationRunner:
         self,
         speed_mm_s: float,
         run_id: str | None = None,
+        template: str = "sample_catheterization",
+        speeds_mm_s: list[float] | None = None,
+        dwell_time_s: float = 1.0,
     ) -> RunResult:
         """
         Synchronous wrapper around run_async().
@@ -236,7 +292,15 @@ class SimulationRunner:
         Safe to call from scripts and unit tests.  Uses asyncio.run() so
         it must NOT be called from inside an already-running event loop.
         """
-        return asyncio.run(self.run_async(speed_mm_s=speed_mm_s, run_id=run_id))
+        return asyncio.run(
+            self.run_async(
+                speed_mm_s=speed_mm_s,
+                run_id=run_id,
+                template=template,
+                speeds_mm_s=speeds_mm_s,
+                dwell_time_s=dwell_time_s,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Internal: execution
@@ -393,6 +457,7 @@ class SimulationRunner:
         run_dir: Path,
         error: str,
         status: SimulationStatus = SimulationStatus.FAILED,
+        template_name: str = "sample_catheterization",
     ) -> RunResult:
         """Build a terminal RunResult for a pre-execution failure."""
         dummy = run_dir / self._METADATA_FILENAME
@@ -408,6 +473,7 @@ class SimulationRunner:
             metadata_file=dummy,
             command=[],
             error_message=error,
+            template_name=template_name,
         )
         self._write_metadata(result)
         logger.error("Pre-execution failure", run_id=run_id, error=error)
@@ -439,17 +505,29 @@ def run_simulation(
     speed_mm_s: float,
     run_id: str | None = None,
     settings: Settings | None = None,
+    template: str = "sample_catheterization",
+    speeds_mm_s: list[float] | None = None,
+    dwell_time_s: float = 1.0,
 ) -> RunResult:
     """
     Convenience wrapper: configure + run a simulation synchronously.
 
     Args:
-        speed_mm_s: Insertion speed in mm/s.
-        run_id:     Optional explicit run ID.
-        settings:   Application settings (optional).
+        speed_mm_s:   Insertion speed in mm/s (single-step templates).
+        run_id:       Optional explicit run ID.
+        settings:     Application settings (optional).
+        template:     Template name.
+        speeds_mm_s:  Per-step speeds for multi-step templates.
+        dwell_time_s: Dwell time per step in seconds.
 
     Returns:
         RunResult
     """
     runner = SimulationRunner(settings=settings)
-    return runner.run(speed_mm_s=speed_mm_s, run_id=run_id)
+    return runner.run(
+        speed_mm_s=speed_mm_s,
+        run_id=run_id,
+        template=template,
+        speeds_mm_s=speeds_mm_s,
+        dwell_time_s=dwell_time_s,
+    )

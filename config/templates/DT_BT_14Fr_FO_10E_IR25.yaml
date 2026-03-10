@@ -1,0 +1,10 @@
+name: "DT_BT_14Fr_FO_10E_IR25"
+label: "14Fr Foley Catheter — IR25 (Urethra Model)"
+feb_file: "DT_BT_14Fr_FO_10E_IR25.feb"
+n_steps: 10
+base_step_size: 0.025
+default_dwell_time_s: 1.0
+displacements_mm: [64.0, 46.0, 28.0, 28.0, 28.0, 28.0, 28.0, 28.0, 28.0, 28.0]
+speed_range:
+  min_mm_s: 10.0
+  max_mm_s: 25.0

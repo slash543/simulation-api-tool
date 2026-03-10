@@ -185,6 +185,9 @@ class DOEPipeline:
         speed_max: float | None = None,
         seed: int | None = None,
         sampler: BaseSampler | None = None,
+        template_name: str | None = None,
+        max_perturbation: float | None = None,
+        dwell_time_s: float | None = None,
     ) -> DOEResult:
         """
         Execute a synchronous DOE campaign.
@@ -192,17 +195,32 @@ class DOEPipeline:
         Samples are generated first, then simulations are run sequentially.
         For concurrent execution, use the async Celery tasks instead.
 
+        For multi-step templates (n_steps > 1), uses :class:`CorrelatedSpeedSampler`
+        to generate a ``(n_samples, n_steps)`` speed matrix.  For the
+        ``sample_catheterization`` single-step template, uses the existing
+        1-D scalar sampler.
+
         Args:
-            n_samples:    Number of simulation runs.  Defaults to
-                          ``settings.doe.default_num_samples``.
-            sampler_name: ``"lhs"``, ``"sobol"``, or ``"uniform"``.
-                          Defaults to ``settings.doe.default_sampler``.
-            speed_min:    Lower speed bound (mm/s).
-                          Defaults to ``settings.doe.speed_min_mm_s``.
-            speed_max:    Upper speed bound (mm/s).
-                          Defaults to ``settings.doe.speed_max_mm_s``.
-            seed:         Random seed for reproducible sampling.
-            sampler:      Pre-built sampler instance (overrides *sampler_name*).
+            n_samples:        Number of simulation runs.  Defaults to
+                              ``settings.doe.default_num_samples``.
+            sampler_name:     ``"lhs"``, ``"sobol"``, or ``"uniform"``.
+                              Defaults to ``settings.doe.default_sampler``.
+            speed_min:        Lower speed bound (mm/s).
+                              Defaults to ``settings.doe.speed_min_mm_s``.
+            speed_max:        Upper speed bound (mm/s).
+                              Defaults to ``settings.doe.speed_max_mm_s``.
+            seed:             Random seed for reproducible sampling.
+            sampler:          Pre-built sampler instance (overrides *sampler_name*).
+                              Only used for single-step templates.
+            template_name:    Template name.  Defaults to
+                              ``settings.doe.default_template`` if available,
+                              otherwise ``"sample_catheterization"``.
+            max_perturbation: Fractional perturbation for CorrelatedSpeedSampler.
+                              Defaults to ``settings.doe.max_perturbation`` if
+                              available, otherwise 0.20.
+            dwell_time_s:     Dwell time per step.  Defaults to
+                              ``settings.doe.default_dwell_time_s`` if available,
+                              otherwise 1.0.
 
         Returns:
             :class:`DOEResult` with all run results and summary statistics.
@@ -213,61 +231,149 @@ class DOEPipeline:
         speed_min = speed_min if speed_min is not None else self._cfg.doe.speed_min_mm_s
         speed_max = speed_max if speed_max is not None else self._cfg.doe.speed_max_mm_s
 
-        # Select sampler
-        active_sampler = sampler or get_sampler(sampler_name)
-
-        # Generate speed values
-        speed_samples = active_sampler.sample(
-            n_samples=n_samples,
-            low=speed_min,
-            high=speed_max,
-            seed=seed,
-        )
-
-        logger.info(
-            "DOE campaign started",
-            sampler=active_sampler.name,
-            n_samples=n_samples,
-            speed_min=speed_min,
-            speed_max=speed_max,
-            seed=seed,
-        )
-
-        doe_result = DOEResult(
-            sampler_name=active_sampler.name,
-            n_requested=n_samples,
-            seed=seed,
-            speed_samples=speed_samples,
-        )
-
-        # Run simulations
-        t_start = time.monotonic()
-        run_results: list[RunResult] = []
-
-        for i, speed in enumerate(speed_samples):
-            logger.info(
-                "DOE run starting",
-                run_index=i + 1,
-                total=n_samples,
-                speed_mm_s=round(float(speed), 4),
+        # Resolve template with backwards-compat default
+        if template_name is None:
+            template_name = getattr(
+                self._cfg.doe, "default_template", "sample_catheterization"
             )
-            result = self._runner.run(speed_mm_s=float(speed))
-            run_results.append(result)
-            logger.info(
-                "DOE run finished",
-                run_index=i + 1,
-                total=n_samples,
-                run_id=result.run_id,
-                status=result.status.value,
-                duration_s=result.duration_s,
+
+        # Resolve max_perturbation
+        if max_perturbation is None:
+            max_perturbation = float(
+                getattr(self._cfg.doe, "max_perturbation", 0.20)
             )
+
+        # Resolve dwell_time_s
+        if dwell_time_s is None:
+            dwell_time_s = float(
+                getattr(self._cfg.doe, "default_dwell_time_s", 1.0)
+            )
+
+        if template_name == "sample_catheterization":
+            # --- Single-step path (backwards compatible) ---
+            active_sampler = sampler or get_sampler(sampler_name)
+            speed_samples = active_sampler.sample(
+                n_samples=n_samples,
+                low=speed_min,
+                high=speed_max,
+                seed=seed,
+            )
+
+            logger.info(
+                "DOE campaign started (single-step)",
+                sampler=active_sampler.name,
+                template=template_name,
+                n_samples=n_samples,
+                speed_min=speed_min,
+                speed_max=speed_max,
+                seed=seed,
+            )
+
+            doe_result = DOEResult(
+                sampler_name=active_sampler.name,
+                n_requested=n_samples,
+                seed=seed,
+                speed_samples=speed_samples,
+            )
+
+            t_start = time.monotonic()
+            run_results: list[RunResult] = []
+
+            for i, speed in enumerate(speed_samples):
+                logger.info(
+                    "DOE run starting",
+                    run_index=i + 1,
+                    total=n_samples,
+                    speed_mm_s=round(float(speed), 4),
+                )
+                result = self._runner.run(
+                    speed_mm_s=float(speed),
+                    template=template_name,
+                )
+                run_results.append(result)
+                logger.info(
+                    "DOE run finished",
+                    run_index=i + 1,
+                    total=n_samples,
+                    run_id=result.run_id,
+                    status=result.status.value,
+                    duration_s=result.duration_s,
+                )
+
+        else:
+            # --- Multi-step path ---
+            from digital_twin_ui.doe.correlated_sampler import CorrelatedSpeedSampler
+            from digital_twin_ui.simulation.template_registry import get_template_registry
+
+            registry = get_template_registry()
+            tc = registry.get(template_name)
+
+            corr_sampler = CorrelatedSpeedSampler(max_perturbation=max_perturbation)
+            speed_matrix = corr_sampler.sample(
+                n_samples=n_samples,
+                speed_min=speed_min,
+                speed_max=speed_max,
+                n_steps=tc.n_steps,
+                seed=seed,
+            )  # shape (n_samples, n_steps)
+
+            # Use the mean speed across steps as the scalar representative
+            speed_samples = speed_matrix.mean(axis=1)
+
+            logger.info(
+                "DOE campaign started (multi-step)",
+                sampler="correlated_lhs",
+                template=template_name,
+                n_samples=n_samples,
+                n_steps=tc.n_steps,
+                speed_min=speed_min,
+                speed_max=speed_max,
+                max_perturbation=max_perturbation,
+                dwell_time_s=dwell_time_s,
+                seed=seed,
+            )
+
+            doe_result = DOEResult(
+                sampler_name="correlated_lhs",
+                n_requested=n_samples,
+                seed=seed,
+                speed_samples=speed_samples,
+            )
+
+            t_start = time.monotonic()
+            run_results = []
+
+            for i, speed_row in enumerate(speed_matrix):
+                step_speeds = speed_row.tolist()
+                mean_speed = float(speed_row.mean())
+                logger.info(
+                    "DOE run starting",
+                    run_index=i + 1,
+                    total=n_samples,
+                    mean_speed_mm_s=round(mean_speed, 4),
+                )
+                result = self._runner.run(
+                    speed_mm_s=mean_speed,
+                    template=template_name,
+                    speeds_mm_s=step_speeds,
+                    dwell_time_s=dwell_time_s,
+                )
+                run_results.append(result)
+                logger.info(
+                    "DOE run finished",
+                    run_index=i + 1,
+                    total=n_samples,
+                    run_id=result.run_id,
+                    status=result.status.value,
+                    duration_s=result.duration_s,
+                )
 
         doe_result.run_results = run_results
         doe_result.wall_time_s = time.monotonic() - t_start
 
         logger.info(
             "DOE campaign complete",
-            sampler=active_sampler.name,
+            template=template_name,
             completed=doe_result.completed,
             failed=doe_result.failed,
             wall_time_s=round(doe_result.wall_time_s, 2),

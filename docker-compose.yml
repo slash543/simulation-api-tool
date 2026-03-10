@@ -33,7 +33,7 @@ x-app-volumes: &app-volumes
   - logs_data:/app/logs
   - datasets_data:/app/data
   - models_data:/app/models
-  - templates_data:/app/templates
+  - ./templates:/app/templates:ro
   # FEBio: wrapper script (sets LD_LIBRARY_PATH only for febio4 process)
   - ./scripts/febio4_wrapper.sh:/usr/local/bin/febio4:ro
   # FEBio real binary — called by the wrapper
@@ -166,4 +166,3 @@ volumes:
   logs_data:
   datasets_data:
   models_data:
-  templates_data:

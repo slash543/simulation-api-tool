@@ -137,18 +137,28 @@ def tool_run_doe_campaign(
     speed_max: float,
     sampler: str = "lhs",
     seed: int | None = None,
+    template: str = "DT_BT_14Fr_FO_10E_IR12",
+    max_perturbation: float = 0.20,
+    dwell_time_s: float = 1.0,
 ) -> str:
     """
     Submit a Design of Experiments (DOE) campaign asynchronously.
 
+    For multi-step templates (e.g. DT_BT_14Fr_FO_10E_IR12), generates
+    correlated per-step speed vectors using CorrelatedSpeedSampler.
+    For sample_catheterization, uses the standard 1-D scalar sampler.
+
     Generates `n_samples` simulations across [speed_min, speed_max] using the
-    chosen sampling strategy.  Returns a task_id; poll with tool_get_doe_status().
+    chosen template.  Returns a task_id; poll with tool_get_doe_status().
     """
     payload: dict[str, Any] = {
         "n_samples": n_samples,
         "speed_min": speed_min,
         "speed_max": speed_max,
         "sampler": sampler,
+        "template": template,
+        "max_perturbation": max_perturbation,
+        "dwell_time_s": dwell_time_s,
     }
     if seed is not None:
         payload["seed"] = seed
@@ -162,6 +172,24 @@ def tool_run_doe_campaign(
         return _err(f"DOE submit failed ({exc.response.status_code}): {exc.response.text}")
     except httpx.HTTPError as exc:
         return _err(f"Request error: {exc}")
+
+
+def tool_list_templates() -> str:
+    """
+    Return the list of available simulation templates with their configurations.
+
+    Each template describes a FEB file, the number of insertion steps,
+    the valid speed range, and per-step displacement magnitudes.
+    Use the template name when calling tool_run_doe_campaign() or
+    tool_run_simulation().
+    """
+    try:
+        with _client() as c:
+            r = c.get("/templates")
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPError as exc:
+        return _err(f"List templates error: {exc}")
 
 
 def tool_get_doe_status(task_id: str) -> str:

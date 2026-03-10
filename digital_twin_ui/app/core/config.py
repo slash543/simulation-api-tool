@@ -47,10 +47,17 @@ class SimulationConfig(BaseModel):
 
 
 class DOEConfig(BaseModel):
-    speed_min_mm_s: float = 4.0
-    speed_max_mm_s: float = 6.0
+    speed_min_mm_s: float = 10.0
+    speed_max_mm_s: float = 25.0
     default_sampler: str = "lhs"
     default_num_samples: int = 10
+    max_perturbation: float = 0.20
+    default_dwell_time_s: float = 1.0
+    default_template: str = "DT_BT_14Fr_FO_10E_IR12"
+
+
+class SQLConfig(BaseModel):
+    connection_string: str = "sqlite:///data/synthetic_db.sqlite"
 
 
 class MLflowConfig(BaseModel):
@@ -117,6 +124,7 @@ class Settings(BaseModel):
     api: APIConfig = Field(default_factory=APIConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    sql: SQLConfig = Field(default_factory=SQLConfig)
 
     # ------------------------------------------------------------------
     # Derived absolute paths (computed properties)

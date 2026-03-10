@@ -17,10 +17,36 @@ class SimulationRequest(BaseModel):
     """Request body for a single simulation run."""
 
     speed_mm_s: float = Field(
-        ...,
+        5.0,
         gt=0,
-        description="Catheter insertion speed in mm/s (e.g. 5.0).",
+        description=(
+            "Catheter insertion speed in mm/s (e.g. 5.0). "
+            "Used for single-step templates (sample_catheterization). "
+            "Ignored when speeds_mm_s is provided."
+        ),
         examples=[5.0],
+    )
+    template: str = Field(
+        "sample_catheterization",
+        description=(
+            "Template name to use for this simulation. "
+            "Use GET /templates to list available templates."
+        ),
+        examples=["sample_catheterization", "DT_BT_14Fr_FO_10E_IR12"],
+    )
+    speeds_mm_s: Optional[list[float]] = Field(
+        None,
+        description=(
+            "Per-step insertion speeds in mm/s for multi-step templates. "
+            "Length must equal the template's n_steps (e.g. 10). "
+            "If omitted for a multi-step template, speed_mm_s is broadcast "
+            "to all steps."
+        ),
+    )
+    dwell_time_s: float = Field(
+        1.0,
+        gt=0,
+        description="Dwell time appended after each insertion ramp, in seconds.",
     )
     run_id: Optional[str] = Field(
         None,
@@ -47,12 +73,12 @@ class DOERequest(BaseModel):
         description="Number of simulation samples.",
     )
     speed_min: float = Field(
-        4.0,
+        10.0,
         gt=0,
         description="Minimum insertion speed in mm/s.",
     )
     speed_max: float = Field(
-        6.0,
+        25.0,
         gt=0,
         description="Maximum insertion speed in mm/s.",
     )
@@ -72,6 +98,28 @@ class DOERequest(BaseModel):
     log_mlflow: bool = Field(
         False,
         description="Log each run to MLflow.",
+    )
+    template: str = Field(
+        "DT_BT_14Fr_FO_10E_IR12",
+        description=(
+            "Template name to use for all simulations in this campaign. "
+            "Use GET /templates to list available templates."
+        ),
+    )
+    max_perturbation: float = Field(
+        0.20,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "Maximum fractional perturbation applied to per-step speeds "
+            "relative to the mean speed (used by CorrelatedSpeedSampler). "
+            "E.g. 0.20 means ±20%."
+        ),
+    )
+    dwell_time_s: float = Field(
+        1.0,
+        gt=0,
+        description="Dwell time appended after each insertion ramp, in seconds.",
     )
 
 
@@ -199,3 +247,23 @@ class HealthResponse(BaseModel):
 
     status: str = "ok"
     version: str = "0.1.0"
+
+
+class TemplateInfo(BaseModel):
+    """Summary information about one simulation template."""
+
+    name: str = Field(..., description="Unique template identifier.")
+    label: str = Field(..., description="Human-readable display name.")
+    n_steps: int = Field(..., description="Number of insertion steps.")
+    speed_range_min: float = Field(..., description="Minimum valid speed in mm/s.")
+    speed_range_max: float = Field(..., description="Maximum valid speed in mm/s.")
+    displacements_mm: list[float] = Field(
+        ...,
+        description="Prescribed displacement for each step in mm.",
+    )
+
+
+class TemplateListResponse(BaseModel):
+    """Response containing all available simulation templates."""
+
+    templates: list[TemplateInfo]
