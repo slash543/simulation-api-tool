@@ -189,6 +189,8 @@ def predict_pressure_batch(speeds_mm_s: list[float]) -> str:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    host = os.getenv("MCP_HOST", "0.0.0.0")
-    port = int(os.getenv("MCP_PORT", "8001"))
-    mcp.run(transport="sse", host=host, port=port)
+    # FastMCP reads host/port from FASTMCP_HOST / FASTMCP_PORT env vars.
+    # Set them from our MCP_HOST / MCP_PORT so the compose env vars work.
+    os.environ.setdefault("FASTMCP_HOST", os.getenv("MCP_HOST", "0.0.0.0"))
+    os.environ.setdefault("FASTMCP_PORT", os.getenv("MCP_PORT", "8001"))
+    mcp.run(transport="sse")
