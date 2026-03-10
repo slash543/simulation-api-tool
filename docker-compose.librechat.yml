@@ -147,9 +147,7 @@ services:
       MEILI_NO_ANALYTICS: "true"
       MEILI_MASTER_KEY: "${MEILI_MASTER_KEY:-insecure-dev-key-change-in-production}"
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "wget --no-verbose --tries=1 --spider http://localhost:7700/health || exit 1"
+      test: ["CMD-SHELL", "curl -sf http://localhost:7700/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -186,9 +184,7 @@ services:
       ollama:
         condition: service_healthy
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "wget --no-verbose --tries=1 --spider http://localhost:3080/ || exit 1"
+      test: ["CMD-SHELL", "curl -sf http://localhost:3080/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
