@@ -43,8 +43,10 @@ mcp = FastMCP(
         "  • predict contact pressure instantly using the trained ML model\n"
         "  • poll async task results\n\n"
         "Typical insertion speed range: 2–10 mm/s. "
-        "Use run_simulation() for accurate FEM results (1–5 min), "
-        "predict_pressure() for instant ML estimates (requires prior training). "
+        "Use run_simulation() for accurate FEM results — it fires in the background "
+        "and returns immediately with host_run_dir and host_xplt_path. "
+        "ALWAYS show these paths to the user after calling run_simulation(). "
+        "Use predict_pressure() for instant ML estimates (requires prior training). "
         "For building a database, prefer run_doe_campaign() with 10–50 samples."
     ),
 )
@@ -63,16 +65,21 @@ def health_check() -> str:
 @mcp.tool()
 def run_simulation(speed_mm_s: float) -> str:
     """
-    Run a catheter insertion FEBio simulation **synchronously** (blocking).
+    Submit a catheter insertion FEBio simulation and return IMMEDIATELY.
 
-    The call returns when the simulation finishes (1–5 minutes).  Use this
-    when you need the result immediately.
+    The simulation runs in the background — do NOT wait for it to finish.
+    After calling this tool, ALWAYS tell the user:
+      1. The simulation is running in the background.
+      2. The result folder on their machine: host_run_dir
+      3. The xplt file they can open in FEBio Studio: host_xplt_path
+         (File > Open in FEBio Studio once the file appears)
+      4. Progress can be watched in: host_run_dir/log.txt
 
     Args:
         speed_mm_s: Catheter insertion speed in mm/s (valid range: 0.5 – 20.0).
 
     Returns:
-        JSON with run_id, speed_mm_s, peak_contact_pressure_pa, duration_s, status.
+        JSON with task_id, run_id, host_run_dir, host_xplt_path, status=PENDING.
     """
     return tool_run_simulation(speed_mm_s)
 
