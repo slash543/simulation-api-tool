@@ -187,6 +187,32 @@ def predict_pressure_batch(speeds_mm_s: list[float]) -> str:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Host/port are configured via FASTMCP_HOST and FASTMCP_PORT env vars
-    # (set in docker-compose.librechat.yml). Defaults: 0.0.0.0:8000.
-    mcp.run(transport="sse")
+    import os
+
+    import uvicorn
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+
+    host = os.getenv("FASTMCP_HOST", "0.0.0.0")
+    port = int(os.getenv("FASTMCP_PORT", "8001"))
+
+    # Build the SSE ASGI app directly so uvicorn gets exact host/port.
+    # This bypasses FastMCP.run() which ignores env vars in some versions.
+    _sse = SseServerTransport("/messages/")
+    _srv = mcp._mcp_server  # underlying mcp.server.Server instance
+
+    async def _handle_sse(request):
+        async with _sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as (recv, send):
+            await _srv.run(recv, send, _srv.create_initialization_options())
+
+    _app = Starlette(
+        routes=[
+            Route("/sse", endpoint=_handle_sse),
+            Mount("/messages/", app=_sse.handle_post_message),
+        ]
+    )
+
+    uvicorn.run(_app, host=host, port=port)
