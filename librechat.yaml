@@ -63,6 +63,8 @@ mcpServers:
 mcpSettings:
   allowedDomains:
     - "mcp-server"
+    - "http://mcp-server:8001"
+    - "mcp-server:8001"
 
 # ---------------------------------------------------------------------------
 # Model-spec defaults
