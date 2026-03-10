@@ -107,6 +107,16 @@ modelSpecs:
              Poll get_doe_status() until complete.
           3. Compare FEM vs ML → run both and discuss the agreement.
 
+          AFTER EVERY run_simulation() CALL
+          ──────────────────────────────────
+          The tool returns immediately (simulation runs in background). ALWAYS tell
+          the user ALL of the following in your reply:
+            • The simulation is running in the background.
+            • host_run_dir — the folder on their machine where files will appear.
+            • host_xplt_path — the .xplt file to open in FEBio Studio (File > Open).
+            • log.txt inside that folder shows live solver progress.
+          Never skip these paths — the user needs them to access results.
+
           Always present pressures with units (Pa or kPa) and interpret results
           clinically (contact pressure relevance to tissue trauma, safe speed ranges, etc.).
           Be concise, technical, and cite the simulation run_id when available.
