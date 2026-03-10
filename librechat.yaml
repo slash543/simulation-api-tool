@@ -59,6 +59,11 @@ mcpServers:
     # timeout for initial handshake with MCP server (ms)
     initTimeout: 30000
 
+# Allow the internal Docker hostname for the MCP server
+mcpSettings:
+  allowedDomains:
+    - "mcp-server"
+
 # ---------------------------------------------------------------------------
 # Model-spec defaults
 # ---------------------------------------------------------------------------
