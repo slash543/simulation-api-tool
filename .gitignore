@@ -19,6 +19,7 @@ mlruns/
 data/raw/
 data/datasets/
 models/
+results/
 *.xplt
 *.log
 *.feb.bak

@@ -1,14 +1,16 @@
 # =============================================================================
-# librechat.yaml — Digital Twin Simulation Assistant
+# librechat.yaml — Digital Twin User Interface
 #
 # LibreChat application configuration.
 # Mount this file at /app/librechat.yaml inside the librechat container.
 #
 # Docs: https://www.librechat.ai/docs/configuration/librechat_yaml
 #
-# LLM Priority:
-#   Primary  — Azure OpenAI (gpt-4o) when AZURE_OPENAI_API_KEY is set
-#   Fallback — Ollama (qwen2.5:7b) always available on the local network
+# LLM Setup:
+#   Active   — Ollama (qwen2.5:7b) always available on the local network
+#   Optional — Azure OpenAI (gpt-4o): uncomment the azureOpenAI block below
+#              and the DTUI-Azure modelSpec, then fill in AZURE_OPENAI_* vars
+#              in .env.librechat to activate.
 # =============================================================================
 
 version: 1.1.8
@@ -29,25 +31,28 @@ interface:
 # ---------------------------------------------------------------------------
 endpoints:
 
-  # ── Azure OpenAI — primary endpoint (requires AZURE_OPENAI_* vars in .env.librechat)
-  # Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_INSTANCE_NAME to real values to activate.
-  # Until then, they hold placeholder values so LibreChat starts; Azure calls will
-  # return 401 (no actual traffic sent while key = "not-configured").
-  azureOpenAI:
-    titleConvo: true
-    titleModel: "${AZURE_OPENAI_DEPLOYMENT_NAME}"
-    groups:
-      - group: "digital-twin-azure"
-        apiKey: "${AZURE_OPENAI_API_KEY}"
-        instanceName: "${AZURE_OPENAI_INSTANCE_NAME}"
-        version: "${AZURE_OPENAI_API_VERSION}"
-        models:
-          gpt-4o:
-            deploymentName: "${AZURE_OPENAI_DEPLOYMENT_NAME}"
-          gpt-4o-mini:
-            deploymentName: "${AZURE_OPENAI_MINI_DEPLOYMENT_NAME}"
+  # ── Azure OpenAI — optional primary endpoint ────────────────────────────
+  # To enable:
+  #   1. Fill in all AZURE_OPENAI_* vars in .env.librechat
+  #   2. Uncomment the entire azureOpenAI block below
+  #   3. Uncomment the DTUI-Azure entry in modelSpecs.list below
+  #   4. Restart the stack: docker compose ... up -d librechat
+  #
+  # azureOpenAI:
+  #   titleConvo: true
+  #   titleModel: "${AZURE_OPENAI_DEPLOYMENT_NAME}"
+  #   groups:
+  #     - group: "digital-twin-azure"
+  #       apiKey: "${AZURE_OPENAI_API_KEY}"
+  #       instanceName: "${AZURE_OPENAI_INSTANCE_NAME}"
+  #       version: "${AZURE_OPENAI_API_VERSION}"
+  #       models:
+  #         gpt-4o:
+  #           deploymentName: "${AZURE_OPENAI_DEPLOYMENT_NAME}"
+  #         gpt-4o-mini:
+  #           deploymentName: "${AZURE_OPENAI_MINI_DEPLOYMENT_NAME}"
 
-  # ── Ollama — fallback endpoint (always available, no API key needed)
+  # ── Ollama — always-on local endpoint (no API key needed) ───────────────
   custom:
     - name: "Ollama (local)"
       apiKey: "ollama"
@@ -85,22 +90,71 @@ mcpSettings:
     - "mcp-server:8001"
 
 # ---------------------------------------------------------------------------
-# Model Specs — Simulation Assistant (Azure primary, Ollama fallback)
+# Model Specs — Digital Twin User Interface
 # ---------------------------------------------------------------------------
 modelSpecs:
   enforce: false
   prioritize: true
   list:
 
-    # ── Primary: Azure OpenAI (gpt-4o) ──────────────────────────────────────
-    - name: "SimAssistant-Azure"
-      label: "Simulation Assistant (Azure OpenAI)"
+    # ── Azure OpenAI (gpt-4o) — uncomment when azureOpenAI endpoint is active
+    # - name: "DTUI-Azure"
+    #   label: "Digital Twin User Interface (Azure OpenAI)"
+    #   preset:
+    #     endpoint: "azureOpenAI"
+    #     model: "gpt-4o"
+    #     temperature: 0.2
+    #     max_tokens: 4096
+    #     system: &simulation_system_prompt |
+    #       You are an expert digital twin simulation assistant for catheter insertion
+    #       biomechanics.  You have access to tools that connect to a FEBio finite-element
+    #       simulation pipeline and a trained machine-learning model.
+    #
+    #       WHAT YOU CAN DO
+    #       ──────────────
+    #       • Run individual FEBio simulations at a specified insertion speed
+    #       • Execute Design-of-Experiments (DOE) campaigns to build synthetic datasets
+    #       • Predict contact pressure instantly using the trained neural network
+    #       • Poll the status of background jobs
+    #
+    #       SIMULATION CONTEXT
+    #       ──────────────────
+    #       • The model simulates catheter insertion into a vascular structure
+    #       • Key output: peak contact pressure (Pa) at the catheter–tissue interface
+    #       • Typical insertion speeds: 2–10 mm/s
+    #       • FEM simulations take 1–5 minutes; ML predictions are instant
+    #
+    #       WORKFLOW GUIDANCE
+    #       ─────────────────
+    #       1. Single-speed query → use predict_pressure() for speed, or run_simulation()
+    #          for high-fidelity FEM results.
+    #       2. Build a synthetic database → run_doe_campaign(n_samples, speed_min, speed_max).
+    #          Poll get_doe_status() until complete.
+    #       3. Compare FEM vs ML → run both and discuss the agreement.
+    #
+    #       AFTER EVERY run_simulation() CALL
+    #       ──────────────────────────────────
+    #       The tool returns immediately (simulation runs in background). ALWAYS tell
+    #       the user ALL of the following in your reply:
+    #         • The simulation is running in the background.
+    #         • host_run_dir — the folder on their machine where files will appear.
+    #         • host_xplt_path — the .xplt file to open in FEBio Studio (File > Open).
+    #         • log.txt inside that folder shows live solver progress.
+    #       Never skip these paths — the user needs them to access results.
+    #
+    #       Always present pressures with units (Pa or kPa) and interpret results
+    #       clinically (contact pressure relevance to tissue trauma, safe speed ranges, etc.).
+    #       Be concise, technical, and cite the simulation run_id when available.
+
+    # ── Ollama / qwen2.5:7b — always active ─────────────────────────────────
+    - name: "DTUI-Ollama"
+      label: "Digital Twin User Interface (Ollama)"
       preset:
-        endpoint: "azureOpenAI"
-        model: "gpt-4o"
+        endpoint: "Ollama (local)"
+        model: "qwen2.5:7b"
         temperature: 0.2
         max_tokens: 4096
-        system: &simulation_system_prompt |
+        system: |
           You are an expert digital twin simulation assistant for catheter insertion
           biomechanics.  You have access to tools that connect to a FEBio finite-element
           simulation pipeline and a trained machine-learning model.
@@ -141,12 +195,13 @@ modelSpecs:
           clinically (contact pressure relevance to tissue trauma, safe speed ranges, etc.).
           Be concise, technical, and cite the simulation run_id when available.
 
-    # ── Fallback: Ollama / qwen2.5:7b ───────────────────────────────────────
-    - name: "SimAssistant-Ollama"
-      label: "Simulation Assistant (Ollama — fallback)"
-      preset:
-        endpoint: "Ollama (local)"
-        model: "qwen2.5:7b"
-        temperature: 0.2
-        max_tokens: 4096
-        system: *simulation_system_prompt
+          RESEARCH DOCUMENT WORKFLOW
+          ──────────────────────────
+          For ANY question about catheter biomechanics, FEBio, materials, simulation
+          methods, or clinical context — search the indexed research PDFs first.
+          1. Call list_research_documents().
+             • If total_chunks is 0, call ingest_research_documents() immediately
+               WITHOUT asking the user — PDFs are already in the folder.
+          2. Call search_research_documents(query) with the user's question.
+          3. Synthesise a clear answer from the returned text chunks.
+          4. Cite the source PDF filename for every fact you use.

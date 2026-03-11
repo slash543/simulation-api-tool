@@ -81,34 +81,42 @@ docker compose -f docker-compose.librechat.yml down
 
 ---
 
-## LLM Strategy — Azure OpenAI (primary) + Ollama (fallback)
+## LLM Strategy — Ollama (default) + Azure OpenAI (optional)
 
-The stack runs with **Ollama out of the box** — no credentials needed.  Azure OpenAI can be enabled later for faster, higher-quality responses.
+The stack runs with **Ollama out of the box** — no credentials needed.  Azure OpenAI can be enabled later for faster, higher-quality responses.  When both are active, you select the model from the LibreChat UI per conversation.
 
-| Endpoint | Requires | Works without credentials |
+| Endpoint | Model spec label | Requires |
 |---|---|---|
-| Azure OpenAI (`gpt-4o`) | Azure API key | Listed in UI; returns 401 until configured |
-| Ollama (local) | Nothing | Fully functional immediately |
+| Ollama (local) | Digital Twin User Interface (Ollama) | Nothing — always active |
+| Azure OpenAI | Digital Twin User Interface (Azure OpenAI) | Azure API key + uncommenting config |
 
-### Activating Azure OpenAI
+### Enabling Azure OpenAI (both endpoints side-by-side)
 
-Edit `.env.librechat` and fill in your Azure values:
+**Step 1 — fill in `.env.librechat`:**
 
 ```dotenv
 AZURE_OPENAI_API_KEY=<your-key-from-Azure-portal>
-AZURE_OPENAI_INSTANCE_NAME=<resource-name>        # e.g. my-openai-eastus
+AZURE_OPENAI_INSTANCE_NAME=<resource-name>   # subdomain only, e.g. my-openai-eastus
+                                              # NOT the full URL
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 AZURE_OPENAI_MINI_DEPLOYMENT_NAME=gpt-4o-mini
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
 ```
 
-Then recreate the LibreChat container (restart alone does not reload `env_file`):
+**Step 2 — uncomment the Azure blocks in `librechat.yaml`:**
+
+- Uncomment the `azureOpenAI:` endpoint block (~line 32)
+- Uncomment the `DTUI-Azure` modelSpec block (~line 74)
+
+**Step 3 — restart LibreChat:**
 
 ```bash
 docker compose -f docker-compose.librechat.yml up -d librechat
 ```
 
-> **Why `not-configured` placeholders?** LibreChat validates every `${VAR}` in `librechat.yaml` at startup — missing variables crash the process. The placeholders let it start cleanly; Azure traffic is only sent when you actually select the Azure endpoint in the UI.
+Both **"Digital Twin User Interface (Ollama)"** and **"Digital Twin User Interface (Azure OpenAI)"** will appear as selectable presets in the LibreChat UI.
+
+> **Important:** LibreChat validates every endpoint in `librechat.yaml` at startup. If `AZURE_OPENAI_API_KEY` is set in `.env.librechat` but the `azureOpenAI:` block is still commented out (or vice versa), LibreChat will start fine — Azure is only active when **both** the env vars and the YAML block are configured. Never set the key without also uncommenting the YAML block, or leave the block uncommented without a valid key — either mismatch will cause a startup crash.
 
 ---
 
@@ -241,16 +249,15 @@ Add PDFs to `research_documents/` and the agent can answer questions about them 
 
 ### Adding documents
 
-```bash
-# Drop PDFs into the folder
-cp my_paper.pdf research_documents/
+Drop PDFs into `research_documents/` — the API detects them automatically:
 
-# Then in the chat: "Please index the research documents"
-# Or via the API:
-curl -X POST http://localhost:8000/api/v1/documents/ingest
+```bash
+cp my_paper.pdf research_documents/
 ```
 
-Force re-ingest after replacing a PDF:
+The API scans `research_documents/` at startup and again every 60 seconds.  New PDFs are ingested automatically; already-indexed PDFs are skipped.  You do not need to call any endpoint manually.
+
+To force re-ingest after replacing a PDF with an updated version:
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/documents/ingest?force=true"
@@ -315,7 +322,27 @@ Update the path and restart the worker:
 docker compose -f docker-compose.librechat.yml restart worker
 ```
 
-**LibreChat won't start**
+**RAG endpoints return 500 / "RAG dependencies not installed"**
+The Docker image was built before `chromadb`, `sentence-transformers`, and `docling` were added to `requirements.txt`.  Rebuild the image:
+```bash
+docker compose -f docker-compose.librechat.yml build api worker
+docker compose -f docker-compose.librechat.yml up -d api worker
+```
+
+**RAG endpoints return 404 "research_documents/ directory not found"**
+The bind-mount was missing.  After pulling the latest code, rebuild and restart:
+```bash
+git pull
+docker compose -f docker-compose.librechat.yml up -d --build api worker
+```
+
+**LibreChat won't start after setting Azure OpenAI key**
+LibreChat crashes if the Azure key is set in `.env.librechat` but the `azureOpenAI:` block in `librechat.yaml` is still commented out, or if the block is uncommented but `AZURE_OPENAI_INSTANCE_NAME` is empty.
+Two options:
+- **Use Ollama only:** leave the `azureOpenAI:` block commented out and clear `AZURE_OPENAI_API_KEY=` in `.env.librechat`.
+- **Use both:** fill in all `AZURE_OPENAI_*` vars **and** uncomment both the endpoint block and the `DTUI-Azure` modelSpec in `librechat.yaml` (see [Enabling Azure OpenAI](#enabling-azure-openai-both-endpoints-side-by-side) above).
+
+**LibreChat won't start (other reasons)**
 ```bash
 docker compose -f docker-compose.librechat.yml logs librechat --tail=50
 ```

@@ -59,6 +59,22 @@ WORKFLOW GUIDANCE
 3. Compare FEM vs ML → run both and discuss the agreement.
 
 Always present pressures with units (Pa or kPa) and interpret results clinically.
+
+RESEARCH DOCUMENT WORKFLOW
+──────────────────────────
+When a user asks ANY question about catheter biomechanics, FEBio, simulation methods,
+material properties, or any topic that might appear in the research PDFs:
+1. Call list_research_documents() to check if the store is indexed.
+2. If total_chunks is 0, call ingest_research_documents() immediately — do NOT ask
+   the user to upload files, the PDFs are already in research_documents/.
+3. Then call search_research_documents(query) with the user's question.
+4. Synthesise a clear answer from the returned chunks.
+5. Always cite the source PDF filename for each piece of information used.
+
+When a user asks "can you read PDFs?" or "list the PDFs":
+- Call list_research_documents().
+- If empty, auto-ingest first, then list again.
+- Present the filenames from the sources list.
 """
 
 

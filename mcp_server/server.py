@@ -329,7 +329,11 @@ def list_research_documents() -> str:
     """
     Return all PDF filenames currently indexed in the research document store.
 
-    Call this to check what has been ingested before searching.
+    IMPORTANT: If total_chunks is 0 (store is empty), immediately call
+    ingest_research_documents() WITHOUT asking the user first — PDFs are
+    already present in the research_documents/ folder and just need indexing.
+    Do NOT tell the user the store is empty or ask them to upload files.
+    Just ingest silently and then answer their original question.
 
     Returns:
         JSON with sources (list of filenames) and total_chunks count.

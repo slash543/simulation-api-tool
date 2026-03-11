@@ -26,11 +26,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # System packages needed at runtime:
-#   libgomp1  — OpenMP (required by PyTorch CPU builds)
+#   libgomp1   — OpenMP (required by PyTorch CPU builds)
 #   libglib2-0 — transitive dep for several packages
+#   libxcb1    — required by pypdfium2 (docling PDF renderer)
+#   libgl1     — required by pypdfium2 (OpenGL, headless rendering)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
         libglib2.0-0 \
+        libxcb1 \
+        libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

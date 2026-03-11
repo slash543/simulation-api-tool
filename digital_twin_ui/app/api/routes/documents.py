@@ -10,6 +10,7 @@ POST /documents/search  — semantic search over indexed documents
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
 from digital_twin_ui.app.api.schemas.documents import (
     DocumentListResponse,
@@ -43,13 +44,24 @@ async def list_documents() -> DocumentListResponse:
 
     Call this to check what has been ingested before running a search.
     """
-    from digital_twin_ui.rag.document_store import get_document_store
-
-    store = get_document_store()
-    return DocumentListResponse(
-        sources=store.list_sources(),
-        total_chunks=store.count(),
-    )
+    try:
+        from digital_twin_ui.rag.document_store import get_document_store
+        store = get_document_store()
+        return DocumentListResponse(
+            sources=store.list_sources(),
+            total_chunks=store.count(),
+        )
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"RAG dependencies not installed: {exc}. Rebuild the Docker image.",
+        ) from exc
+    except Exception as exc:
+        logger.error("list_documents error: {exc}", exc=exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Document store error: {exc}",
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
