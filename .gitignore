@@ -24,6 +24,9 @@ models/
 *.feb.bak
 *.feb
 
+# Research documents — keep the folder, ignore PDF contents
+research_documents/*.pdf
+
 # Test / coverage
 .pytest_cache/
 .coverage
