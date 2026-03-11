@@ -25,7 +25,13 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, status
 
 from digital_twin_ui.app.api.schemas.simulation import (
+    CatalogueDesignEntry,
+    CatalogueConfigEntry,
+    CatalogueListResponse,
+    CatheterSimRequest,
     DOERequest,
+    DOESpeedPreviewRequest,
+    DOESpeedPreviewResponse,
     DOEResultResponse,
     ExtractionRequest,
     HealthResponse,
@@ -49,6 +55,7 @@ from digital_twin_ui.extraction.xplt_parser import extract_contact_pressure
 from digital_twin_ui.simulation.simulation_runner import SimulationRunner
 from digital_twin_ui.tasks.simulation_tasks import (
     extract_results_task,
+    run_catheter_simulation_task,
     run_doe_campaign_task,
     run_full_pipeline_task,
     run_simulation_task,
@@ -495,3 +502,169 @@ async def ml_predict_batch(body: MLPredictBatchRequest) -> MLPredictBatchRespons
         for s, p in zip(body.speeds_mm_s, predictions_values)
     ]
     return MLPredictBatchResponse(predictions=predictions)
+
+
+# ---------------------------------------------------------------------------
+# Catheter catalogue endpoints
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/catheter-designs",
+    response_model=CatalogueListResponse,
+    tags=["catheter-designs"],
+)
+async def list_catheter_designs() -> CatalogueListResponse:
+    """
+    Return all available catheter designs with their size/urethra configurations.
+
+    **Selection flow for the agent:**
+    1. Call this endpoint and present the three tip designs to the user.
+    2. Ask the user to pick a design (``name`` field).
+    3. Show the available ``configurations`` for that design and ask the user
+       to pick one (``key`` field: e.g. ``"14Fr_IR12"``).
+    4. Ask for 10 insertion speeds (one per step).
+    5. Call ``POST /simulations/run-catheter``.
+    """
+    from digital_twin_ui.simulation.catheter_catalogue import get_catalogue
+
+    cat = get_catalogue()
+    params = cat.simulation_params
+    designs = [
+        CatalogueDesignEntry(
+            name=d.name,
+            label=d.label,
+            configurations=[
+                CatalogueConfigEntry(key=c.key, label=c.label, feb_file=c.feb_file)
+                for c in d.configurations
+            ],
+        )
+        for d in cat.designs
+    ]
+    return CatalogueListResponse(
+        designs=designs,
+        n_steps=params.n_steps,
+        displacements_mm=params.displacements_mm,
+        speed_range_min=params.speed_min_mm_s,
+        speed_range_max=params.speed_max_mm_s,
+        default_uniform_speed_mm_s=params.default_uniform_speed_mm_s,
+        default_dwell_time_s=params.default_dwell_time_s,
+    )
+
+
+@router.post(
+    "/simulations/run-catheter",
+    response_model=TaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["catheter-designs"],
+)
+async def submit_catheter_simulation(body: CatheterSimRequest) -> TaskResponse:
+    """
+    Submit a FEBio simulation for a specific catheter design + configuration
+    with per-step insertion speeds.
+
+    The base FEB file is read from ``base_configuration/`` according to the
+    design + configuration selected.  **Only** the load curve time intervals
+    and ``time_steps`` counts are modified — all geometry, material, and
+    contact definitions are preserved from the base file.
+
+    For each step i:
+        ``ramp_duration_i = displacement_mm[i] / speeds_mm_s[i]``
+
+    Returns immediately with a ``task_id``. Poll via ``GET /simulations/{task_id}``.
+    """
+    from digital_twin_ui.simulation.catheter_catalogue import get_catalogue
+
+    cat = get_catalogue()
+    params = cat.simulation_params
+
+    # Validate design + configuration exist and FEB file is present
+    try:
+        tc = cat.resolve(body.design, body.configuration)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+
+    # Validate speed count
+    if len(body.speeds_mm_s) != params.n_steps:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Provide exactly {params.n_steps} speeds (one per step); "
+                f"got {len(body.speeds_mm_s)}."
+            ),
+        )
+
+    cfg = get_settings()
+    run_id = body.run_id or (
+        "run_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        + "_" + uuid.uuid4().hex[:4]
+    )
+    run_dir = cfg.runs_dir_abs / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    xplt_path = run_dir / "input.xplt"
+
+    logger.info(
+        "Submitting catheter simulation",
+        design=body.design,
+        configuration=body.configuration,
+        speeds=body.speeds_mm_s,
+        run_id=run_id,
+    )
+
+    task = run_catheter_simulation_task.delay(
+        design=body.design,
+        configuration=body.configuration,
+        speeds_mm_s=body.speeds_mm_s,
+        dwell_time_s=body.dwell_time_s,
+        run_id=run_id,
+    )
+
+    return TaskResponse(
+        task_id=task.id,
+        status="PENDING",
+        message=(
+            f"Simulation queued — {body.design} / {body.configuration}, "
+            f"{params.n_steps} steps"
+        ),
+        run_id=run_id,
+        run_dir=str(run_dir),
+        xplt_path=str(xplt_path),
+    )
+
+
+@router.post(
+    "/doe/preview-speeds",
+    response_model=DOESpeedPreviewResponse,
+    tags=["doe"],
+)
+async def preview_doe_speeds(body: DOESpeedPreviewRequest) -> DOESpeedPreviewResponse:
+    """
+    Generate and return DOE speed arrays without running any simulations.
+
+    Uses :class:`CorrelatedSpeedSampler` to produce ``n_samples`` arrays of
+    ``n_steps`` correlated per-step speeds in mm/s.  Each row is sorted
+    ascending and clipped to ``[speed_min, speed_max]``.
+
+    Use this to show the user what speed profiles a DOE campaign would use
+    before committing to the full run.
+    """
+    from digital_twin_ui.doe.correlated_sampler import CorrelatedSpeedSampler
+
+    sampler = CorrelatedSpeedSampler(max_perturbation=body.max_perturbation)
+    matrix = sampler.sample(
+        n_samples=body.n_samples,
+        speed_min=body.speed_min,
+        speed_max=body.speed_max,
+        n_steps=body.n_steps,
+        seed=body.seed,
+    )
+    return DOESpeedPreviewResponse(
+        n_samples=body.n_samples,
+        n_steps=body.n_steps,
+        speed_min=body.speed_min,
+        speed_max=body.speed_max,
+        samples=matrix.tolist(),
+    )

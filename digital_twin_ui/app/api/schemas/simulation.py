@@ -267,3 +267,137 @@ class TemplateListResponse(BaseModel):
     """Response containing all available simulation templates."""
 
     templates: list[TemplateInfo]
+
+
+# ---------------------------------------------------------------------------
+# Catheter catalogue schemas  (design → configuration → speeds)
+# ---------------------------------------------------------------------------
+
+class CatalogueConfigEntry(BaseModel):
+    """One size × urethra-model configuration for a catheter design."""
+
+    key: str = Field(..., description="Config identifier, e.g. '14Fr_IR12'.")
+    label: str = Field(..., description="Human-readable label shown to the user.")
+    feb_file: str = Field(..., description="FEB filename in base_configuration/.")
+
+
+class CatalogueDesignEntry(BaseModel):
+    """One catheter tip design with all its available configurations."""
+
+    name: str = Field(..., description="Design key, e.g. 'ball_tip'.")
+    label: str = Field(..., description="Human-readable name, e.g. 'Ball Tip'.")
+    configurations: list[CatalogueConfigEntry] = Field(
+        ...,
+        description="Available size × urethra-model combinations.",
+    )
+
+
+class CatalogueListResponse(BaseModel):
+    """All catheter designs with their configurations and shared sim params."""
+
+    designs: list[CatalogueDesignEntry]
+    n_steps: int = Field(..., description="Number of insertion steps (same for all designs).")
+    displacements_mm: list[float] = Field(
+        ..., description="Per-step displacement magnitudes in mm."
+    )
+    speed_range_min: float = Field(..., description="Minimum valid speed in mm/s.")
+    speed_range_max: float = Field(..., description="Maximum valid speed in mm/s.")
+    default_uniform_speed_mm_s: float = Field(
+        ..., description="Default speed for uniform profiles."
+    )
+    default_dwell_time_s: float = Field(
+        ..., description="Default dwell time appended after each ramp, in seconds."
+    )
+
+
+class CatheterSimRequest(BaseModel):
+    """Request body for a catheter simulation (design + configuration + per-step speeds)."""
+
+    design: str = Field(
+        ...,
+        description=(
+            "Catheter tip design key from GET /catheter-designs "
+            "(e.g. 'ball_tip', 'nelaton_tip', 'vapro_introducer')."
+        ),
+        examples=["ball_tip"],
+    )
+    configuration: str = Field(
+        ...,
+        description=(
+            "Size × urethra-model configuration key from the chosen design "
+            "(e.g. '14Fr_IR12', '14Fr_IR25', '16Fr_IR12')."
+        ),
+        examples=["14Fr_IR12"],
+    )
+    speeds_mm_s: list[float] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Per-step insertion speeds in mm/s. "
+            "Length must equal n_steps (10 for all current designs). "
+            "Each value controls the ramp duration: ramp_i = displacement_mm[i] / speeds_mm_s[i]. "
+            "If the user wants a uniform profile, provide the same value for all steps."
+        ),
+        examples=[[15.0, 15.0, 14.0, 14.0, 13.0, 13.0, 12.0, 12.0, 11.0, 11.0]],
+    )
+    dwell_time_s: float = Field(
+        1.0,
+        gt=0,
+        description="Dwell time in seconds appended after each ramp (default 1.0 s).",
+    )
+    run_id: Optional[str] = Field(
+        None,
+        description="Optional explicit run identifier. Auto-generated if omitted.",
+    )
+
+
+class DOESpeedPreviewRequest(BaseModel):
+    """Request body for previewing DOE speed samples without running simulations."""
+
+    n_samples: int = Field(
+        10,
+        ge=1,
+        le=200,
+        description="Number of speed-array samples to generate.",
+    )
+    speed_min: float = Field(
+        10.0,
+        gt=0,
+        description="Minimum mean speed in mm/s.",
+    )
+    speed_max: float = Field(
+        25.0,
+        gt=0,
+        description="Maximum mean speed in mm/s.",
+    )
+    n_steps: int = Field(
+        10,
+        ge=1,
+        description="Number of steps per sample (length of each speed array).",
+    )
+    max_perturbation: float = Field(
+        0.20,
+        ge=0.0,
+        le=0.5,
+        description="Maximum fractional per-step perturbation (0.20 = ±20%).",
+    )
+    seed: Optional[int] = Field(
+        None,
+        description="Optional RNG seed for reproducibility.",
+    )
+
+
+class DOESpeedPreviewResponse(BaseModel):
+    """Preview of DOE speed arrays (no simulations run)."""
+
+    n_samples: int
+    n_steps: int
+    speed_min: float
+    speed_max: float
+    samples: list[list[float]] = Field(
+        ...,
+        description=(
+            "List of n_samples speed arrays, each of length n_steps. "
+            "Each array is sorted ascending within the allowed range."
+        ),
+    )

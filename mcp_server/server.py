@@ -22,9 +22,12 @@ from tools import (
     tool_get_doe_status,
     tool_get_task_status,
     tool_health_check,
+    tool_list_catheter_designs,
     tool_list_templates,
     tool_predict_pressure,
     tool_predict_pressure_batch,
+    tool_preview_doe_speeds,
+    tool_run_catheter_simulation,
     tool_run_doe_campaign,
     tool_run_simulation,
     tool_submit_simulation,
@@ -39,14 +42,27 @@ mcp = FastMCP(
     instructions=(
         "You are an expert digital twin simulation assistant for catheter insertion "
         "biomechanics. You have tools to:\n"
-        "  • run FEBio finite-element simulations at specific insertion speeds\n"
+        "  • list available catheter designs (tip geometries)\n"
+        "  • run FEBio FEM simulations for a chosen catheter design with per-step speeds\n"
         "  • run DOE campaigns to build a synthetic simulation database\n"
         "  • predict contact pressure instantly using the trained ML model\n"
         "  • poll async task results\n\n"
-        "Typical insertion speed range: 2–10 mm/s. "
-        "Use run_simulation() for accurate FEM results — it fires in the background "
-        "and returns immediately with host_run_dir and host_xplt_path. "
-        "ALWAYS show these paths to the user after calling run_simulation(). "
+        "WORKFLOW WHEN USER ASKS TO RUN A SIMULATION:\n"
+        "  1. Call list_catheter_designs() → present the 3 tip designs by label.\n"
+        "  2. Ask: 'Which catheter tip design?' (Ball Tip / Nelaton Tip / Vapro Introducer)\n"
+        "  3. Show configurations for the chosen design → ask: 'Which size / urethra model?'\n"
+        "     (e.g. 14Fr IR12, 14Fr IR25, 16Fr IR12)\n"
+        "  4. Ask for 10 insertion speeds (one per step), showing the displacement for each step.\n"
+        "     If the user doesn't know → offer:\n"
+        "       a) Uniform speed: ask for a single value (10–25 mm/s), repeat it 10 times.\n"
+        "       b) Call preview_doe_speeds() to show example correlated speed profiles.\n"
+        "  5. Confirm the full speed array with the user, then call run_catheter_simulation().\n\n"
+        "AFTER run_catheter_simulation() RETURNS:\n"
+        "  Always tell the user ALL of:\n"
+        "  • The simulation is running in the background.\n"
+        "  • host_run_dir — folder on their machine where files will appear.\n"
+        "  • host_xplt_path — the .xplt file to open in FEBio Studio (File > Open).\n"
+        "  • log.txt inside that folder shows live solver progress.\n\n"
         "Use predict_pressure() for instant ML estimates (requires prior training). "
         "For building a database, prefer run_doe_campaign() with 10–50 samples."
     ),
@@ -237,6 +253,100 @@ def predict_pressure_batch(speeds_mm_s: list[float]) -> str:
         JSON list of {speed_mm_s, predicted_pressure_pa} entries.
     """
     return tool_predict_pressure_batch(speeds_mm_s)
+
+
+@mcp.tool()
+def list_catheter_designs() -> str:
+    """
+    Return all catheter designs with their available configurations.
+
+    ALWAYS call this first when a user asks to run a simulation.
+
+    Presents 3 tip designs: Ball Tip, Nelaton Tip, Vapro Introducer Tip.
+    Each design has 2–3 configurations (catheter size × urethra model).
+
+    Conversation flow:
+      1. Call this tool → present the 3 designs by label.
+      2. Ask: "Which catheter tip design would you like?"
+      3. Show configurations for the chosen design → ask: "Which size / urethra model?"
+      4. Ask for 10 insertion speeds (one per step), or offer uniform default.
+      5. Call run_catheter_simulation() with design, configuration, speeds_mm_s.
+
+    Returns:
+        JSON with designs list + shared simulation params (n_steps, displacements_mm,
+        speed_range_min/max, default_uniform_speed_mm_s, default_dwell_time_s).
+    """
+    return tool_list_catheter_designs()
+
+
+@mcp.tool()
+def run_catheter_simulation(
+    design: str,
+    configuration: str,
+    speeds_mm_s: list[float],
+    dwell_time_s: float = 1.0,
+) -> str:
+    """
+    Submit a FEBio simulation for a catheter design + configuration with per-step speeds.
+
+    PREREQUISITE: call list_catheter_designs() and confirm design, configuration,
+    and all 10 speeds with the user before calling this tool.
+
+    Only the load curve time intervals and time_steps counts are modified —
+    all geometry, material, and contact definitions are preserved from the base file.
+
+    If the user does not know the 10 speeds, offer:
+      a) A uniform speed — repeat a single value 10 times.
+      b) A preview via preview_doe_speeds() to show example correlated profiles.
+
+    Returns IMMEDIATELY.  ALWAYS tell the user host_run_dir and host_xplt_path.
+
+    Args:
+        design:        Tip design key (e.g. "ball_tip", "nelaton_tip", "vapro_introducer").
+        configuration: Config key (e.g. "14Fr_IR12", "14Fr_IR25", "16Fr_IR12").
+        speeds_mm_s:   10 insertion speeds in mm/s (one per step).
+        dwell_time_s:  Dwell time in seconds after each ramp (default 1.0).
+
+    Returns:
+        JSON with task_id, run_id, host_run_dir, host_xplt_path, status=PENDING.
+    """
+    return tool_run_catheter_simulation(design, configuration, speeds_mm_s, dwell_time_s)
+
+
+@mcp.tool()
+def preview_doe_speeds(
+    n_samples: int = 10,
+    speed_min: float = 10.0,
+    speed_max: float = 25.0,
+    n_steps: int = 10,
+    max_perturbation: float = 0.20,
+    seed: int | None = None,
+) -> str:
+    """
+    Generate and return DOE speed arrays WITHOUT running any simulations.
+
+    Use this to:
+      • Show the user example 10-element speed profiles before they choose their own.
+      • Preview what speed arrays a DOE campaign would generate.
+      • Help a user who doesn't know what 10 speeds to use.
+
+    Uses CorrelatedSpeedSampler: each sample is a 10-element array sorted
+    ascending with small per-step perturbations around a random mean speed.
+
+    Args:
+        n_samples:        Number of speed arrays to generate (default 10).
+        speed_min:        Minimum speed in mm/s (default 10.0).
+        speed_max:        Maximum speed in mm/s (default 25.0).
+        n_steps:          Steps per array — must match the design (default 10).
+        max_perturbation: Max fractional per-step variation (0.20 = ±20%).
+        seed:             Optional RNG seed for reproducibility.
+
+    Returns:
+        JSON with samples: list of n_samples speed arrays, each of length n_steps.
+    """
+    return tool_preview_doe_speeds(
+        n_samples, speed_min, speed_max, n_steps, max_perturbation, seed
+    )
 
 
 # ---------------------------------------------------------------------------

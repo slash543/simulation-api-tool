@@ -471,3 +471,105 @@ def run_full_pipeline_task(
             output["mlflow_error"] = str(exc)
 
     return output
+
+
+# ---------------------------------------------------------------------------
+# Task: run a simulation using a catheter design from base_configuration/
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    base=_BaseTask,
+    name="digital_twin_ui.tasks.run_catheter_simulation",
+    bind=True,
+    max_retries=0,
+    time_limit=4000,
+    soft_time_limit=3700,
+)
+def run_catheter_simulation_task(
+    self: Task,
+    design: str,
+    configuration: str,
+    speeds_mm_s: list[float],
+    dwell_time_s: float = 1.0,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Configure and run a FEBio simulation using the catheter catalogue.
+
+    Reads ``base_configuration/<feb_file>`` for the given design + configuration,
+    modifies only the load curve time intervals and time_steps counts, then
+    executes FEBio.
+
+    Args:
+        design:       Catheter tip design key (e.g. ``"ball_tip"``).
+        configuration: Size × urethra-model key (e.g. ``"14Fr_IR12"``).
+        speeds_mm_s:  One speed per insertion step in mm/s (length = n_steps).
+        dwell_time_s: Dwell time in seconds appended after each ramp.
+        run_id:       Optional explicit run identifier.
+
+    Returns:
+        JSON-serialisable dict from :meth:`RunResult.as_dict`.
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    from digital_twin_ui.app.core.config import get_settings
+    from digital_twin_ui.simulation.catheter_catalogue import get_catalogue
+    from digital_twin_ui.simulation.multi_step_configurator import MultiStepConfigurator
+    from digital_twin_ui.simulation.simulation_runner import SimulationRunner
+
+    logger.info(
+        "Starting catheter simulation: design=%s config=%s dwell=%.2fs run_id=%s",
+        design,
+        configuration,
+        dwell_time_s,
+        run_id,
+    )
+
+    cfg = get_settings()
+    cat = get_catalogue()
+    tc = cat.resolve(design, configuration)
+
+    # Validate speed count
+    if len(speeds_mm_s) != tc.n_steps:
+        raise ValueError(
+            f"{design}/{configuration} has {tc.n_steps} steps but "
+            f"{len(speeds_mm_s)} speeds were provided."
+        )
+
+    # Create run directory and configure the FEB file
+    run_id = run_id or (
+        "run_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        + "_" + uuid.uuid4().hex[:4]
+    )
+    run_dir = cfg.runs_dir_abs / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    input_feb = run_dir / "input.feb"
+
+    # Modify load curve time intervals + time_steps for each step
+    configurator = MultiStepConfigurator(tc)
+    configurator.configure(
+        speeds_mm_s=speeds_mm_s,
+        dwell_time_s=dwell_time_s,
+        output_path=input_feb,
+    )
+
+    # Run the solver on the pre-configured FEB file
+    template_name = f"{design}/{configuration}"
+    runner = SimulationRunner()
+    result = runner.run_preconfigured(
+        feb_path=input_feb,
+        run_id=run_id,
+        run_dir=run_dir,
+        template_name=template_name,
+        speed_mm_s=speeds_mm_s[0],
+        speeds_mm_s=speeds_mm_s,
+    )
+
+    logger.info(
+        "Catheter simulation finished: run_id=%s status=%s duration=%.1fs",
+        result.run_id,
+        result.status.value,
+        result.duration_s or 0.0,
+    )
+    return result.as_dict()

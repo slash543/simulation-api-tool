@@ -1,0 +1,97 @@
+# =============================================================================
+# Catheter Catalogue
+# =============================================================================
+#
+# Single source of truth for all catheter designs and their available
+# configurations (size × urethra-model combinations).
+#
+# Structure
+# ---------
+# designs:
+#   <design_key>:
+#     label: Human-readable tip name shown to the user
+#     configurations:
+#       <config_key>:
+#         label: Human-readable size+urethra label
+#         feb_file: Filename inside base_configuration/
+#
+# Adding a new design
+# -------------------
+# 1. Place the .feb file in base_configuration/
+# 2. Add an entry under designs with the matching feb_file value.
+#    The catalogue is auto-loaded at startup — no code changes needed.
+#
+# Config key convention: <size>_<urethra-model>   e.g. 14Fr_IR12
+# =============================================================================
+
+designs:
+
+  ball_tip:
+    label: "Ball Tip"
+    configurations:
+      14Fr_IR12:
+        label: "14Fr catheter — IR12 urethra model"
+        feb_file: "ball_tip_14FR_ir12.feb"
+      14Fr_IR25:
+        label: "14Fr catheter — IR25 urethra model"
+        feb_file: "ball_tip_14FR_ir25.feb"
+      16Fr_IR12:
+        label: "16Fr catheter — IR12 urethra model"
+        feb_file: "ball_tip_16FR_ir12.feb"
+
+  nelaton_tip:
+    label: "Nelaton Tip"
+    configurations:
+      14Fr_IR12:
+        label: "14Fr catheter — IR12 urethra model"
+        feb_file: "nelaton_tip_14Fr_ir12.feb"
+      14Fr_IR25:
+        label: "14Fr catheter — IR25 urethra model"
+        feb_file: "nelaton_tip_14Fr_ir25.feb"
+      16Fr_IR12:
+        label: "16Fr catheter — IR12 urethra model"
+        feb_file: "nelaton_tip_16Fr_ir12.feb"
+
+  vapro_introducer:
+    label: "Vapro Introducer Tip"
+    configurations:
+      14Fr_IR12:
+        label: "14Fr catheter — IR12 urethra model"
+        feb_file: "vapro_introducer_14Fr_tip_ir12.feb"
+      16Fr_IR12:
+        label: "16Fr catheter — IR12 urethra model"
+        feb_file: "vapro_introducer_16Fr_tip_ir12.feb"
+
+
+# =============================================================================
+# Shared simulation parameters
+# (all base_configuration files share the same 10-step setup)
+# =============================================================================
+
+simulation:
+  n_steps: 10
+  base_step_size: 0.1          # seconds — solver step size, kept fixed per step
+  default_dwell_time_s: 1.0    # seconds — dwell after each insertion ramp
+
+  # Per-step prescribed displacement magnitudes (mm, positive = magnitude).
+  # Step 1 : 64 mm (long initial advance through penile shaft)
+  # Step 2 : 46 mm (advance through bulbar urethra)
+  # Steps 3–10 : 28 mm each (incremental advances)
+  displacements_mm:
+    - 64.0
+    - 46.0
+    - 28.0
+    - 28.0
+    - 28.0
+    - 28.0
+    - 28.0
+    - 28.0
+    - 28.0
+    - 28.0
+
+  speed_range:
+    min_mm_s: 10.0
+    max_mm_s: 25.0
+
+  # Default speed used when user asks for a uniform speed profile
+  default_uniform_speed_mm_s: 15.0

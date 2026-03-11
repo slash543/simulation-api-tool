@@ -302,6 +302,50 @@ class SimulationRunner:
             )
         )
 
+    def run_preconfigured(
+        self,
+        feb_path: Path,
+        run_id: str,
+        run_dir: Path,
+        template_name: str,
+        speed_mm_s: float,
+        speeds_mm_s: list[float] | None = None,
+    ) -> RunResult:
+        """
+        Execute FEBio on an already-configured .feb file.
+
+        Skips the configuration step — the caller is responsible for having
+        written a valid FEB to *feb_path* before calling this.
+
+        Args:
+            feb_path:      Absolute path to the pre-configured input.feb.
+            run_id:        Run identifier (used for directory / metadata naming).
+            run_dir:       Directory containing feb_path (solver CWD).
+            template_name: Template or design name recorded in metadata.
+            speed_mm_s:    Reference speed for logging / metadata.
+            speeds_mm_s:   Full per-step speed vector for metadata.
+
+        Returns:
+            RunResult — always returned, even on solver failure.
+        """
+        xplt_file = run_dir / (feb_path.stem + ".xplt")
+        command = self._build_command(feb_path)
+        result = RunResult(
+            run_id=run_id,
+            status=SimulationStatus.QUEUED,
+            speed_mm_s=speed_mm_s,
+            run_dir=run_dir,
+            input_feb=feb_path,
+            log_file=run_dir / self._LOG_FILENAME,
+            xplt_file=xplt_file,
+            metadata_file=run_dir / self._METADATA_FILENAME,
+            command=command,
+            template_name=template_name,
+            speeds_mm_s=speeds_mm_s,
+        )
+        self._write_metadata(result)
+        return asyncio.run(self._execute(result))
+
     # ------------------------------------------------------------------
     # Internal: execution
     # ------------------------------------------------------------------

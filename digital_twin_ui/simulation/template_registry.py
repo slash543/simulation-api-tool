@@ -73,6 +73,7 @@ class TemplateConfig:
     displacements_mm: list[float]
     speed_range: SpeedRange
     _project_root: Path = field(default_factory=Path.cwd, repr=False, compare=False)
+    _feb_subdir: str = field(default="templates", repr=False, compare=False)
 
     @property
     def is_multi_step(self) -> bool:
@@ -82,7 +83,7 @@ class TemplateConfig:
     @property
     def feb_path(self) -> Path:
         """Absolute path to the .feb template file."""
-        return self._project_root / "templates" / self.feb_file
+        return self._project_root / self._feb_subdir / self.feb_file
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable dictionary of this config."""

@@ -331,30 +331,77 @@ The **MCP server** is the portability layer — any MCP-compatible client
 (LibreChat, Claude Desktop, VS Code Copilot Chat, …) can connect to it at
 `http://<host>:8001/sse` without changes to the simulation back-end.
 
+### LLM Strategy — Azure OpenAI (primary) + Ollama (fallback)
+
+LibreChat is configured with **two endpoints** that are always present in the UI:
+
+| Endpoint | Model | Requires | Status without credentials |
+|---|---|---|---|
+| Azure OpenAI | `gpt-4o` | Azure API key + instance | Listed in UI; calls return 401 |
+| Ollama (local) | `qwen2.5:7b` | Nothing (runs locally) | Fully functional |
+
+**Without Azure credentials**, LibreChat starts normally and Ollama handles all
+requests.  The Azure endpoint appears in the model selector but any attempt to use
+it returns an authentication error from Azure — no credentials are sent.
+
+**When Azure credentials are available**, update `.env.librechat` (see below) and
+restart the container.  LibreChat will prefer `SimAssistant-Azure` (listed first in
+`modelSpecs` with `prioritize: true`) while Ollama remains as fallback.
+
 ### Quick Start
 
 ```bash
-# 1. Create LibreChat secrets
+# 1. Prepare environment files
 cp .env.librechat.example .env.librechat
 
-# Fill in the four secrets (each command prints the value to use):
+# Generate required secrets (each command prints the value to paste):
 openssl rand -hex 32   # → JWT_SECRET
 openssl rand -hex 32   # → JWT_REFRESH_SECRET
-openssl rand -hex 32   # → CREDS_KEY
-openssl rand -hex 16   # → CREDS_IV
+openssl rand -hex 32   # → CREDS_KEY  (must be exactly 64 hex chars)
+openssl rand -hex 16   # → CREDS_IV   (must be exactly 32 hex chars)
 openssl rand -hex 24   # → MEILI_MASTER_KEY
 
 # 2. Start the full stack (first run pulls qwen2.5:7b — ~4.7 GB)
-docker compose -f docker-compose.librechat.yml up --build
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build
 
 # 3. Open http://localhost:3080 and register an account
 
-# 4. Create the Simulation Assistant agent (optional — can be done in UI)
+# 4. Create the Simulation Assistant agent (optional — can also be done in the UI)
 python scripts/setup-agent.py \
     --url http://localhost:3080 \
     --username you@example.com \
     --password your_password
 ```
+
+### Activating Azure OpenAI (when credentials are available)
+
+Edit `.env.librechat` and replace the placeholder values:
+
+```dotenv
+# Before (placeholders — LibreChat starts but Azure calls return 401):
+AZURE_OPENAI_API_KEY=not-configured
+AZURE_OPENAI_INSTANCE_NAME=not-configured
+
+# After (real credentials):
+AZURE_OPENAI_API_KEY=<your-key-from-Azure-portal>
+AZURE_OPENAI_INSTANCE_NAME=<your-resource-name>   # e.g. my-openai-eastus
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o               # your deployment name
+AZURE_OPENAI_MINI_DEPLOYMENT_NAME=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+```
+
+Then recreate the container (restart alone does not reload `env_file`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d librechat
+```
+
+> **Why `not-configured` placeholders?**  LibreChat validates that every
+> `${VAR}` reference in `librechat.yaml` maps to a real environment variable at
+> startup — if any is missing, the process crashes before serving requests.  The
+> placeholder values satisfy the validation so the app starts; actual Azure API
+> traffic is only sent when the user selects the Azure endpoint and makes a chat
+> request.
 
 ### LLM Choices (Ollama)
 
@@ -365,14 +412,14 @@ python scripts/setup-agent.py \
 | `llama3.1:8b` | 4.7 GB | ★★★★ | Very good |
 | `qwen2.5:3b` | 2 GB | ★★★ | Good |
 
-To switch, edit the model name in `librechat.yaml` and in the
-`ollama-init` command in `docker-compose.librechat.yml`.
+To switch Ollama model, update the model name in `librechat.yaml` and in the
+`ollama-init` service command in `docker-compose.librechat.yml`.
 
 ### Creating the Agent in the LibreChat UI
 
 1. Click **New Agent** (left sidebar → Agent icon)
 2. Name: `Simulation Assistant`
-3. Endpoint: `Simulation Agent (Ollama)` · Model: `qwen2.5:7b`
+3. Endpoint: `Ollama (local)` (or `azureOpenAI` if credentials are set) · Model: `qwen2.5:7b`
 4. Paste the system prompt from `librechat.yaml` → `modelSpecs.list[0].preset.system`
 5. Under **Tools** → enable all tools from `simulation-tools`
 6. Save and start chatting

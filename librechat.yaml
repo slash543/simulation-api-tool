@@ -30,21 +30,22 @@ interface:
 endpoints:
 
   # ── Azure OpenAI — primary endpoint (requires AZURE_OPENAI_* vars in .env.librechat)
+  # Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_INSTANCE_NAME to real values to activate.
+  # Until then, they hold placeholder values so LibreChat starts; Azure calls will
+  # return 401 (no actual traffic sent while key = "not-configured").
   azureOpenAI:
     titleConvo: true
-    titleModel: "${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o}"
-    # Suppress the endpoint in the UI if the key is not configured
-    # (LibreChat will still list it but calls will fail gracefully)
+    titleModel: "${AZURE_OPENAI_DEPLOYMENT_NAME}"
     groups:
       - group: "digital-twin-azure"
         apiKey: "${AZURE_OPENAI_API_KEY}"
         instanceName: "${AZURE_OPENAI_INSTANCE_NAME}"
-        version: "${AZURE_OPENAI_API_VERSION:-2024-02-15-preview}"
+        version: "${AZURE_OPENAI_API_VERSION}"
         models:
           gpt-4o:
-            deploymentName: "${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o}"
+            deploymentName: "${AZURE_OPENAI_DEPLOYMENT_NAME}"
           gpt-4o-mini:
-            deploymentName: "${AZURE_OPENAI_MINI_DEPLOYMENT_NAME:-gpt-4o-mini}"
+            deploymentName: "${AZURE_OPENAI_MINI_DEPLOYMENT_NAME}"
 
   # ── Ollama — fallback endpoint (always available, no API key needed)
   custom:

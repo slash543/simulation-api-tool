@@ -20,6 +20,7 @@ data/raw/
 data/datasets/
 models/
 *.xplt
+*.log
 *.feb.bak
 *.feb
 

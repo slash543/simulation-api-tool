@@ -240,3 +240,135 @@ def tool_predict_pressure_batch(speeds_mm_s: list[float]) -> str:
         return _err(f"Batch prediction failed ({exc.response.status_code}): {exc.response.text}")
     except httpx.HTTPError as exc:
         return _err(f"Request error: {exc}")
+
+
+
+def tool_list_catheter_designs() -> str:
+    """
+    Return all catheter designs with their available configurations.
+
+    The response contains:
+      - designs: list of { name, label, configurations: [{key, label, feb_file}] }
+      - n_steps:                   number of insertion steps (10 for all current designs)
+      - displacements_mm:          per-step displacement magnitudes in mm
+      - speed_range_min/max:       valid insertion speed bounds in mm/s
+      - default_uniform_speed_mm_s: default speed for uniform profiles (15 mm/s)
+      - default_dwell_time_s:      default dwell time per step (1.0 s)
+
+    Call this FIRST whenever the user asks to run a simulation.
+    Present the three designs by label, then show configurations for the chosen design.
+    """
+    try:
+        with _client() as c:
+            r = c.get("/catheter-designs")
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPError as exc:
+        return _err(f"List catheter designs error: {exc}")
+
+
+def tool_run_catheter_simulation(
+    design: str,
+    configuration: str,
+    speeds_mm_s: list[float],
+    dwell_time_s: float = 1.0,
+) -> str:
+    """
+    Submit a FEBio simulation for a catheter design + configuration with per-step speeds.
+
+    Reads base_configuration/<feb_file> and modifies ONLY the load curve time
+    intervals and time_steps counts.  All geometry/material/contact is preserved.
+
+    For each step i:  ramp_i = displacement_mm[i] / speeds_mm_s[i]
+
+    Returns IMMEDIATELY.  ALWAYS tell the user:
+      1. The simulation is running in the background.
+      2. host_run_dir — folder on their machine where files will appear.
+      3. host_xplt_path — the .xplt to open in FEBio Studio (File > Open).
+      4. log.txt inside that folder shows live solver progress.
+
+    Args:
+        design:        Tip design key (e.g. "ball_tip", "nelaton_tip", "vapro_introducer").
+        configuration: Size x urethra-model key (e.g. "14Fr_IR12", "14Fr_IR25", "16Fr_IR12").
+        speeds_mm_s:   Per-step insertion speeds in mm/s (length = n_steps = 10).
+                       For uniform speed, repeat the same value 10 times.
+        dwell_time_s:  Dwell time in seconds after each ramp (default 1.0).
+
+    Returns:
+        JSON with task_id, run_id, host_run_dir, host_xplt_path, status=PENDING.
+    """
+    payload = {
+        "design": design,
+        "configuration": configuration,
+        "speeds_mm_s": speeds_mm_s,
+        "dwell_time_s": dwell_time_s,
+    }
+    try:
+        with _client() as c:
+            r = c.post("/simulations/run-catheter", json=payload)
+            r.raise_for_status()
+            data = r.json()
+
+        if data.get("xplt_path"):
+            data["host_xplt_path"] = _to_host_path(data["xplt_path"])
+        if data.get("run_dir"):
+            data["host_run_dir"] = _to_host_path(data["run_dir"])
+
+        return _ok(data)
+    except httpx.HTTPStatusError as exc:
+        return _err(
+            f"Submit failed ({exc.response.status_code}): {exc.response.text}"
+        )
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
+def tool_preview_doe_speeds(
+    n_samples: int = 10,
+    speed_min: float = 10.0,
+    speed_max: float = 25.0,
+    n_steps: int = 10,
+    max_perturbation: float = 0.20,
+    seed: int | None = None,
+) -> str:
+    """
+    Generate and return DOE speed arrays without running any simulations.
+
+    Uses CorrelatedSpeedSampler to produce n_samples arrays of n_steps correlated
+    per-step speeds in mm/s, each row sorted ascending within [speed_min, speed_max].
+
+    Use this to show the user what speed profiles a DOE campaign would use
+    before committing to the full run, or to help the user choose their 10 speeds.
+
+    Args:
+        n_samples:        Number of speed-array samples to generate (default 10).
+        speed_min:        Minimum mean speed in mm/s (default 10.0).
+        speed_max:        Maximum mean speed in mm/s (default 25.0).
+        n_steps:          Steps per sample (default 10, must match the design).
+        max_perturbation: Max fractional per-step perturbation (0.20 = +/-20%).
+        seed:             Optional RNG seed for reproducibility.
+
+    Returns:
+        JSON with samples: list of n_samples speed arrays, each of length n_steps.
+    """
+    payload: dict[str, Any] = {
+        "n_samples": n_samples,
+        "speed_min": speed_min,
+        "speed_max": speed_max,
+        "n_steps": n_steps,
+        "max_perturbation": max_perturbation,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+
+    try:
+        with _client() as c:
+            r = c.post("/doe/preview-speeds", json=payload)
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPStatusError as exc:
+        return _err(
+            f"Preview failed ({exc.response.status_code}): {exc.response.text}"
+        )
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
