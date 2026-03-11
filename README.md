@@ -445,6 +445,116 @@ Add it to any MCP-compatible client:
 
 ---
 
+## RAG Document Search
+
+The platform includes a fully local, offline-capable retrieval-augmented generation (RAG) pipeline for searching research documents.  Drop any PDF into `research_documents/` and the agent can answer questions about it — with citations.
+
+### Stack — all open-source, commercial use permitted
+
+| Component | Library | License |
+|---|---|---|
+| PDF parsing + OCR | `docling` | MIT |
+| Embeddings | `sentence-transformers` (BAAI/bge-small-en-v1.5) | Apache 2.0 / MIT |
+| Vector store | `chromadb` | Apache 2.0 |
+
+Everything runs locally — no external API calls, no usage fees.  The embedding model (~130 MB) is downloaded once to the HuggingFace cache on first use.
+
+### Adding a document
+
+1. Copy your PDF into `research_documents/`.
+2. Trigger ingestion (one of):
+   - **Via the agent**: ask *"Please index the research documents"* — the agent calls `ingest_research_documents()`.
+   - **Via the API**: `POST http://localhost:8000/api/v1/documents/ingest`
+   - **Force re-ingest** after replacing a PDF: add `?force=true`
+
+### Asking questions
+
+Once indexed, the agent automatically searches documents when you ask relevant questions:
+
+> *"What material model is used for the urethra tissue?"*
+> *"What is the Young's modulus of the catheter body?"*
+> *"Explain the contact algorithm used in FEBio."*
+
+The agent retrieves the most relevant chunks and cites the source PDF for every piece of information it uses.
+
+### REST API endpoints
+
+```
+GET  /api/v1/documents/list            List indexed PDFs and total chunk count
+POST /api/v1/documents/ingest          Scan research_documents/ and index new PDFs
+POST /api/v1/documents/ingest?force=true  Re-ingest all PDFs (use after replacing a file)
+POST /api/v1/documents/search          Semantic search
+```
+
+Search request / response:
+
+```json
+POST /api/v1/documents/search
+{ "query": "catheter material Young's modulus", "n_results": 5 }
+
+{
+  "query": "catheter material Young's modulus",
+  "total_hits": 3,
+  "hits": [
+    {
+      "text": "The catheter body uses a neo-Hookean model with E = 11.25 MPa...",
+      "source": "FEBio Users Manual.pdf",
+      "chunk_index": 42,
+      "score": 0.921
+    }
+  ]
+}
+```
+
+### MCP tools (available to the agent)
+
+| Tool | Description |
+|---|---|
+| `list_research_documents()` | Show what PDFs are currently indexed |
+| `ingest_research_documents(force)` | Index new PDFs from `research_documents/` |
+| `search_research_documents(query, n_results)` | Semantic search with source citations |
+
+### Ingestion pipeline (per PDF)
+
+```
+PDF file
+  │
+  ▼
+docling (text-layer PDFs + scanned/OCR PDFs)
+  │
+  ▼
+Clean Markdown (headings, tables, lists preserved)
+  │
+  ▼
+512-character overlapping chunks (64-char overlap)
+  │
+  ▼
+sentence-transformers embed (BAAI/bge-small-en-v1.5, L2-normalised)
+  │
+  ▼
+ChromaDB upsert  →  data/chroma/  (persistent on disk)
+```
+
+### Configuration
+
+RAG settings can be overridden in `config/simulation.yaml` or via environment variables:
+
+```yaml
+rag:
+  documents_dir: research_documents   # folder to scan for PDFs
+  chroma_dir: data/chroma             # ChromaDB persistence directory
+  embedding_model: BAAI/bge-small-en-v1.5
+  chunk_size: 512
+  chunk_overlap: 64
+```
+
+```bash
+DTUI__RAG__CHUNK_SIZE=1024        # larger chunks for longer context
+DTUI__RAG__EMBEDDING_MODEL=BAAI/bge-base-en-v1.5   # larger model for better accuracy
+```
+
+---
+
 ## Requirements
 
 - Python 3.11+
