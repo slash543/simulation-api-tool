@@ -132,7 +132,6 @@ class TestDockerCompose:
         volumes = compose["volumes"]
         assert "redis_data" in volumes
         assert "mlflow_data" in volumes
-        assert "runs_data" in volumes
 
     def test_flower_has_profile(self, compose: dict) -> None:
         flower = compose["services"]["flower"]

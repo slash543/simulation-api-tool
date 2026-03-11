@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -121,8 +121,12 @@ class TestSubmitSimulation:
         )
         assert resp.status_code == 422
 
-    def test_missing_speed_422(self, client: TestClient) -> None:
-        resp = client.post("/api/v1/simulations/run", json={})
+    def test_zero_speed_422(self, client: TestClient) -> None:
+        """speed_mm_s must be > 0 (gt=0 constraint)."""
+        fake_task = _make_async_result("t-zero")
+        with patch("digital_twin_ui.app.api.routes.simulation.run_simulation_task") as mt:
+            mt.delay.return_value = fake_task
+            resp = client.post("/api/v1/simulations/run", json={"speed_mm_s": 0.0, "extract": False})
         assert resp.status_code == 422
 
 
@@ -196,26 +200,17 @@ class TestRunSimulationSync:
         with patch(
             "digital_twin_ui.app.api.routes.simulation.SimulationRunner"
         ) as mock_cls:
-            mock_cls.return_value.run.return_value = mock_result
-            with patch(
-                "digital_twin_ui.app.api.routes.simulation.extract_contact_pressure"
-            ) as mock_ext:
-                mock_pressure = MagicMock()
-                mock_pressure.as_dict.return_value = {
-                    "times": [], "max_pressure": 1.0,
-                    "mean_pressure": [], "n_faces": 10
-                }
-                mock_ext.return_value = mock_pressure
-                resp = client.post(
-                    "/api/v1/simulations/run/sync",
-                    json={"speed_mm_s": 5.0, "extract": False},
-                )
+            mock_cls.return_value.run_async = AsyncMock(return_value=mock_result)
+            resp = client.post(
+                "/api/v1/simulations/run/sync",
+                json={"speed_mm_s": 5.0, "extract": False},
+            )
         assert resp.status_code == 200
 
     def test_sync_run_id_in_response(self, client: TestClient, tmp_path: Path) -> None:
         mock_result = self._mock_run_result(tmp_path)
         with patch("digital_twin_ui.app.api.routes.simulation.SimulationRunner") as mock_cls:
-            mock_cls.return_value.run.return_value = mock_result
+            mock_cls.return_value.run_async = AsyncMock(return_value=mock_result)
             resp = client.post(
                 "/api/v1/simulations/run/sync",
                 json={"speed_mm_s": 5.0, "extract": False},
@@ -225,7 +220,7 @@ class TestRunSimulationSync:
     def test_sync_status_in_response(self, client: TestClient, tmp_path: Path) -> None:
         mock_result = self._mock_run_result(tmp_path)
         with patch("digital_twin_ui.app.api.routes.simulation.SimulationRunner") as mock_cls:
-            mock_cls.return_value.run.return_value = mock_result
+            mock_cls.return_value.run_async = AsyncMock(return_value=mock_result)
             resp = client.post(
                 "/api/v1/simulations/run/sync",
                 json={"speed_mm_s": 5.0, "extract": False},

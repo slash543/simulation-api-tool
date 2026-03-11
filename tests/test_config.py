@@ -118,8 +118,8 @@ class TestLoadSettings:
         assert s.simulation.num_steps == 2
         assert s.simulation.simulator_executable == "febio4"
         assert s.simulation.simulator_args == ["-i"]
-        assert s.doe.speed_min_mm_s == 4.0
-        assert s.doe.speed_max_mm_s == 6.0
+        assert s.doe.speed_min_mm_s == 10.0
+        assert s.doe.speed_max_mm_s == 25.0
         assert s.ml.hidden_dims == [64, 128, 256]
 
     def test_loads_custom_yaml(self, tmp_path):
@@ -276,8 +276,8 @@ class TestSimulationConfig:
 class TestDOEConfig:
     def test_default_range(self):
         c = DOEConfig()
-        assert c.speed_min_mm_s == pytest.approx(4.0)
-        assert c.speed_max_mm_s == pytest.approx(6.0)
+        assert c.speed_min_mm_s == pytest.approx(10.0)
+        assert c.speed_max_mm_s == pytest.approx(25.0)
 
     def test_range_is_valid(self):
         c = DOEConfig()

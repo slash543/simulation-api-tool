@@ -304,7 +304,7 @@ class MultiStepConfigurator:
         must read ``<value lc="N">`` inside each Step's Boundary block.
         """
         step_lc_ids: list[int] = []
-        steps = root.findall(".//Step")
+        steps = root.findall(".//step")
         for step_elem in steps:
             # Look for any <value lc="N"> inside this step
             value_elems = step_elem.findall(".//value[@lc]")
@@ -338,9 +338,9 @@ class MultiStepConfigurator:
     def _collect_step_elements(
         self, root: etree._Element
     ) -> dict[int, etree._Element]:
-        """Return {step_id: element} for all Step elements."""
+        """Return {step_id: element} for all step elements."""
         steps: dict[int, etree._Element] = {}
-        for elem in root.findall(".//Step"):
+        for elem in root.findall(".//step"):
             id_str = elem.get("id")
             if id_str is not None:
                 steps[int(id_str)] = elem

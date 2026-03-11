@@ -108,7 +108,7 @@ class TestRunSimulation:
             client_inst.post.return_value = mock
             tool_run_simulation(3.5)
             client_inst.post.assert_called_once_with(
-                "/simulations/run/sync", json={"speed_mm_s": 3.5}
+                "/simulations/run", json={"speed_mm_s": 3.5, "extract": False}
             )
 
     def test_http_error_returns_error_json(self) -> None:

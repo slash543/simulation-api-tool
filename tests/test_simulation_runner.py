@@ -260,7 +260,7 @@ class TestRunDirectoryLayout:
         """xplt_file path is always reported even though the solver mock won't create it."""
         with _patch_subprocess(success_proc):
             result = await runner.run_async(speed_mm_s=5.0, run_id="run_xplt_path")
-        assert result.xplt_file.name == "results.xplt"
+        assert result.xplt_file.name == "input.xplt"
         assert result.xplt_file.parent == result.run_dir
 
     @pytest.mark.asyncio

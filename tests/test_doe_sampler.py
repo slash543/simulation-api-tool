@@ -418,63 +418,87 @@ class TestDOEPipelineRun:
     def _make_mock_runner(self, status: SimulationStatus = SimulationStatus.COMPLETED):
         """Return a mock runner whose .run() returns a fixed RunResult."""
         runner = MagicMock(spec=["run"])
-        runner.run.side_effect = lambda speed_mm_s: _make_run_result(speed_mm_s, status)
+        runner.run.side_effect = lambda speed_mm_s, **kwargs: _make_run_result(speed_mm_s, status)
         return runner
 
     def test_run_calls_runner_n_times(self, clean_settings_cache):
         mock_runner = self._make_mock_runner()
         pipeline = DOEPipeline(runner=mock_runner)
-        pipeline.run(n_samples=5, sampler_name="uniform", speed_min=4.0, speed_max=6.0)
+        pipeline.run(
+            n_samples=5, sampler_name="uniform", speed_min=4.0, speed_max=6.0,
+            template_name="sample_catheterization",
+        )
         assert mock_runner.run.call_count == 5
 
     def test_run_returns_doe_result(self, clean_settings_cache):
         mock_runner = self._make_mock_runner()
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(n_samples=3, sampler_name="uniform", speed_min=4.0, speed_max=6.0)
+        result = pipeline.run(
+            n_samples=3, sampler_name="uniform", speed_min=4.0, speed_max=6.0,
+            template_name="sample_catheterization",
+        )
         assert isinstance(result, DOEResult)
 
     def test_run_result_has_correct_count(self, clean_settings_cache):
         mock_runner = self._make_mock_runner()
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(n_samples=4, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=0)
+        result = pipeline.run(
+            n_samples=4, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=0,
+            template_name="sample_catheterization",
+        )
         assert len(result.run_results) == 4
 
     def test_run_completed_count(self, clean_settings_cache):
         mock_runner = self._make_mock_runner(SimulationStatus.COMPLETED)
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(n_samples=3, sampler_name="uniform", speed_min=4.0, speed_max=6.0)
+        result = pipeline.run(
+            n_samples=3, sampler_name="uniform", speed_min=4.0, speed_max=6.0,
+            template_name="sample_catheterization",
+        )
         assert result.completed == 3
         assert result.failed == 0
 
     def test_run_failed_count(self, clean_settings_cache):
         mock_runner = self._make_mock_runner(SimulationStatus.FAILED)
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(n_samples=3, sampler_name="uniform", speed_min=4.0, speed_max=6.0)
+        result = pipeline.run(
+            n_samples=3, sampler_name="uniform", speed_min=4.0, speed_max=6.0,
+            template_name="sample_catheterization",
+        )
         assert result.failed == 3
         assert result.completed == 0
 
     def test_run_stores_sampler_name(self, clean_settings_cache):
         mock_runner = self._make_mock_runner()
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(n_samples=2, sampler_name="sobol", speed_min=4.0, speed_max=6.0, seed=0)
+        result = pipeline.run(
+            n_samples=2, sampler_name="sobol", speed_min=4.0, speed_max=6.0, seed=0,
+            template_name="sample_catheterization",
+        )
         assert result.sampler_name == "sobol"
 
     def test_run_stores_seed(self, clean_settings_cache):
         mock_runner = self._make_mock_runner()
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(n_samples=2, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=77)
+        result = pipeline.run(
+            n_samples=2, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=77,
+            template_name="sample_catheterization",
+        )
         assert result.seed == 77
 
     def test_run_wall_time_positive(self, clean_settings_cache):
         mock_runner = self._make_mock_runner()
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(n_samples=2, sampler_name="uniform", speed_min=4.0, speed_max=6.0)
+        result = pipeline.run(
+            n_samples=2, sampler_name="uniform", speed_min=4.0, speed_max=6.0,
+            template_name="sample_catheterization",
+        )
         assert result.wall_time_s >= 0.0
 
     def test_run_uses_config_defaults(self, clean_settings_cache):
         mock_runner = self._make_mock_runner()
         pipeline = DOEPipeline(runner=mock_runner)
-        result = pipeline.run(seed=0)
+        result = pipeline.run(seed=0, template_name="sample_catheterization")
         cfg = pipeline._cfg
         assert mock_runner.run.call_count == cfg.doe.default_num_samples
 
@@ -482,11 +506,14 @@ class TestDOEPipelineRun:
         """The speeds passed to the runner must respect the requested bounds."""
         speeds_called = []
         mock_runner = MagicMock(spec=["run"])
-        mock_runner.run.side_effect = lambda speed_mm_s: (
+        mock_runner.run.side_effect = lambda speed_mm_s, **kwargs: (
             speeds_called.append(speed_mm_s) or _make_run_result(speed_mm_s)
         )
         pipeline = DOEPipeline(runner=mock_runner)
-        pipeline.run(n_samples=8, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=0)
+        pipeline.run(
+            n_samples=8, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=0,
+            template_name="sample_catheterization",
+        )
         for s in speeds_called:
             assert 4.0 <= s <= 6.0
 
@@ -496,16 +523,18 @@ class TestDOEPipelineRun:
 
         def make_runner(collector):
             r = MagicMock(spec=["run"])
-            r.run.side_effect = lambda speed_mm_s: (
+            r.run.side_effect = lambda speed_mm_s, **kwargs: (
                 collector.append(speed_mm_s) or _make_run_result(speed_mm_s)
             )
             return r
 
         DOEPipeline(runner=make_runner(speeds_a)).run(
-            n_samples=5, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=42
+            n_samples=5, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=42,
+            template_name="sample_catheterization",
         )
         DOEPipeline(runner=make_runner(speeds_b)).run(
-            n_samples=5, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=42
+            n_samples=5, sampler_name="lhs", speed_min=4.0, speed_max=6.0, seed=42,
+            template_name="sample_catheterization",
         )
         np.testing.assert_allclose(speeds_a, speeds_b)
 
@@ -518,6 +547,7 @@ class TestDOEPipelineRun:
             sampler=custom_sampler,
             speed_min=4.0,
             speed_max=6.0,
+            template_name="sample_catheterization",
         )
         assert result.sampler_name == "uniform"
         assert mock_runner.run.call_count == 3
