@@ -124,6 +124,117 @@ Every run writes files to `runs/run_YYYYMMDD_HHMMSS_xxxx/` on your host machine:
 
 ---
 
+## Running Python scripts independently
+
+All analysis scripts can be run directly from a terminal — no Docker, no FastAPI server, no Celery required.
+
+### Prerequisites
+
+```bash
+# One-time: create the virtual environment and install dependencies
+chmod +x setup.sh && ./setup.sh
+```
+
+### Rule: always run from the project root with the venv Python
+
+```bash
+cd /path/to/simulation-api-tool
+
+# Good — uses the venv Python which has all packages installed
+.venv/bin/python scripts/my_script.py
+
+# Bad — system Python lacks the project packages
+python scripts/my_script.py
+```
+
+Alternatively, activate the venv once for your session:
+
+```bash
+source .venv/bin/activate
+python scripts/my_script.py   # now works
+deactivate                     # when done
+```
+
+### Quick sanity check
+
+```bash
+cd simulation-api-tool
+.venv/bin/python -c "from digital_twin_ui.extraction.xplt_parser import XpltParser; print('OK')"
+```
+
+---
+
+### extract_pressure.py — Extract contact pressure from an xplt file
+
+Parses a FEBio `.xplt` result file and produces:
+- **CSV** — `facet_id, surface_name, surface_id, speed_mm_s, facet_area, time_step, time_s, contact_pressure`
+- **PNG** — grid of contact-pressure contour snapshots at evenly-spaced timesteps (cylindrical unroll)
+- **GIF** — animated contour cycling through every timestep (optional)
+
+**Step 1 — inspect the file to see available surfaces:**
+
+```bash
+.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt --list
+```
+
+```
+Surfaces:
+  id=3  faces= 23734  name='catheter_slidePrimary'
+  id=4  faces= 10571  name='catheter_slideSecondary'
+  ...
+Surface variables : ['contact pressure', 'contact gap', ...]
+```
+
+**Step 2 — extract to CSV + contour plot:**
+
+```bash
+.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
+    --surface "catheter_slidePrimary" \
+    --speed 5.0 \
+    --output-dir results/
+```
+
+**All options:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--surface NAME` | first surface | Surface name (use `--list` to see choices) |
+| `--speed N` | `5.0` | Insertion speed in mm/s (stored as metadata in CSV) |
+| `--variable NAME` | `contact pressure` | Surface variable to extract |
+| `--output-dir DIR` | `results/` | Directory for output files |
+| `--list` | — | Print surfaces and variables, then exit |
+| `--no-plot` | — | CSV only — skip PNG and GIF generation |
+| `--animate` | — | Also save an animated GIF (requires Pillow) |
+
+**Output files** (in `--output-dir`):
+
+| File | Contents |
+|---|---|
+| `<stem>_<surface>_pressure.csv` | Full time-series table |
+| `<stem>_<surface>_contour.png` | 12-panel contour snapshot grid |
+| `<stem>_<surface>_animation.gif` | Animated contour (`--animate` only) |
+
+**Examples:**
+
+```bash
+# CSV only (skip plots — fastest):
+.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
+    --surface "catheter_slidePrimary" --no-plot
+
+# Both contact surfaces, separate output files:
+.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
+    --surface "catheter_slidePrimary" --output-dir results/
+
+.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
+    --surface "catheter_slideSecondary" --output-dir results/
+
+# With animation:
+.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
+    --surface "catheter_slidePrimary" --animate --output-dir results/
+```
+
+---
+
 ## Research Documents (RAG)
 
 Add PDFs to `research_documents/` and the agent can answer questions about them with source citations.
