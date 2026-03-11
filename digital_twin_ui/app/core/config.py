@@ -108,6 +108,22 @@ class LoggingConfig(BaseModel):
         return Path(v)
 
 
+class RAGConfig(BaseModel):
+    """Configuration for the RAG document-search pipeline."""
+
+    documents_dir: Path = Path("research_documents")
+    chroma_dir: Path = Path("data/chroma")
+    # BAAI/bge-small-en-v1.5 — MIT licence, commercial use OK, ~130 MB, CPU-friendly
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    chunk_size: int = 512
+    chunk_overlap: int = 64
+
+    @field_validator("documents_dir", "chroma_dir", mode="before")
+    @classmethod
+    def _to_path(cls, v: Any) -> Path:
+        return Path(v)
+
+
 # ---------------------------------------------------------------------------
 # Root Settings
 # ---------------------------------------------------------------------------
@@ -125,6 +141,7 @@ class Settings(BaseModel):
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     sql: SQLConfig = Field(default_factory=SQLConfig)
+    rag: RAGConfig = Field(default_factory=RAGConfig)
 
     # ------------------------------------------------------------------
     # Derived absolute paths (computed properties)
@@ -164,6 +181,18 @@ class Settings(BaseModel):
             return uri
         p = Path(uri)
         return str(p if p.is_absolute() else self.project_root / p)
+
+    @property
+    def rag_documents_dir_abs(self) -> Path:
+        """Absolute path to the research_documents/ folder."""
+        p = self.rag.documents_dir
+        return p if p.is_absolute() else self.project_root / p
+
+    @property
+    def rag_chroma_dir_abs(self) -> Path:
+        """Absolute path to the ChromaDB persistence directory."""
+        p = self.rag.chroma_dir
+        return p if p.is_absolute() else self.project_root / p
 
 
 # ---------------------------------------------------------------------------

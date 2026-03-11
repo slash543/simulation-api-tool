@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from digital_twin_ui.app.core.logging import configure_from_settings, get_logger
 from digital_twin_ui.app.api.routes.simulation import router as simulation_router
+from digital_twin_ui.app.api.routes.documents import router as documents_router
 
 logger = get_logger(__name__)
 
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(simulation_router, prefix="/api/v1")
+    app.include_router(documents_router, prefix="/api/v1")
 
     return app
 

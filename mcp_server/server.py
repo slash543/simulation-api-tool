@@ -22,7 +22,9 @@ from tools import (
     tool_get_doe_status,
     tool_get_task_status,
     tool_health_check,
+    tool_ingest_research_documents,
     tool_list_catheter_designs,
+    tool_list_research_documents,
     tool_list_templates,
     tool_predict_pressure,
     tool_predict_pressure_batch,
@@ -30,6 +32,7 @@ from tools import (
     tool_run_catheter_simulation,
     tool_run_doe_campaign,
     tool_run_simulation,
+    tool_search_research_documents,
     tool_submit_simulation,
 )
 
@@ -64,7 +67,15 @@ mcp = FastMCP(
         "  • host_xplt_path — the .xplt file to open in FEBio Studio (File > Open).\n"
         "  • log.txt inside that folder shows live solver progress.\n\n"
         "Use predict_pressure() for instant ML estimates (requires prior training). "
-        "For building a database, prefer run_doe_campaign() with 10–50 samples."
+        "For building a database, prefer run_doe_campaign() with 10–50 samples.\n\n"
+        "RESEARCH DOCUMENT WORKFLOW:\n"
+        "  When a user asks a question about catheter biomechanics, FEBio, simulation\n"
+        "  methods, or any topic that might be covered in the research documents:\n"
+        "  1. Call search_research_documents(query) to find relevant excerpts.\n"
+        "  2. If the result says the store is empty, call ingest_research_documents()\n"
+        "     first, then retry the search.\n"
+        "  3. Synthesise a clear answer from the returned chunks.\n"
+        "  4. Always cite the source PDF filename for each piece of information."
     ),
 )
 
@@ -311,6 +322,66 @@ def run_catheter_simulation(
         JSON with task_id, run_id, host_run_dir, host_xplt_path, status=PENDING.
     """
     return tool_run_catheter_simulation(design, configuration, speeds_mm_s, dwell_time_s)
+
+
+@mcp.tool()
+def list_research_documents() -> str:
+    """
+    Return all PDF filenames currently indexed in the research document store.
+
+    Call this to check what has been ingested before searching.
+
+    Returns:
+        JSON with sources (list of filenames) and total_chunks count.
+    """
+    return tool_list_research_documents()
+
+
+@mcp.tool()
+def ingest_research_documents(force: bool = False) -> str:
+    """
+    Scan research_documents/ for new PDFs and index them for semantic search.
+
+    Already-indexed PDFs are skipped unless force=True.  Call this:
+      - After adding new PDFs to the research_documents/ folder.
+      - With force=True after replacing a PDF with an updated version.
+
+    Ingestion pipeline (fully local, no external APIs):
+      • docling  — parses text-layer PDFs and scanned/OCR PDFs
+      • sentence-transformers (BAAI/bge-small-en-v1.5, MIT) — local embeddings
+      • ChromaDB — persistent vector index on disk
+
+    Args:
+        force: Re-ingest all PDFs even if already indexed (default False).
+
+    Returns:
+        JSON with n_ingested, n_skipped, n_failed, and per-file results.
+    """
+    return tool_ingest_research_documents(force)
+
+
+@mcp.tool()
+def search_research_documents(query: str, n_results: int = 5) -> str:
+    """
+    Semantically search the indexed research documents and return relevant excerpts.
+
+    Uses local embeddings and ChromaDB — no external API calls.
+
+    WORKFLOW:
+      1. If you haven't searched before, call list_research_documents() first.
+      2. If the store is empty, call ingest_research_documents() to index PDFs.
+      3. Then call this tool with the user's question.
+      4. Synthesise an answer from the returned chunks and cite the source PDFs.
+
+    Args:
+        query:     Natural-language question or keyword string.
+        n_results: Number of chunks to retrieve (default 5, max 20).
+
+    Returns:
+        JSON with query, total_hits, and hits: [{text, source, chunk_index, score}].
+        Score is cosine similarity in [0, 1] — higher = more relevant.
+    """
+    return tool_search_research_documents(query, n_results)
 
 
 @mcp.tool()

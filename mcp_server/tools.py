@@ -323,6 +323,100 @@ def tool_run_catheter_simulation(
         return _err(f"Request error: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# RAG document tools
+# ---------------------------------------------------------------------------
+
+def tool_list_research_documents() -> str:
+    """
+    Return all PDF filenames currently indexed in the research document store,
+    plus the total chunk count.
+
+    Call this to check what has been ingested before searching.
+    """
+    try:
+        with _client() as c:
+            r = c.get("/documents/list")
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPError as exc:
+        return _err(f"List documents error: {exc}")
+
+
+def tool_ingest_research_documents(force: bool = False) -> str:
+    """
+    Scan the research_documents/ folder for new PDFs and index them.
+
+    Each PDF is parsed (including scanned/OCR PDFs via docling), split into
+    chunks, embedded with a local sentence-transformers model, and stored in
+    a ChromaDB vector index.  Already-indexed PDFs are skipped unless
+    force=True.
+
+    Call this:
+      - After adding new PDFs to research_documents/
+      - With force=True after replacing a PDF with an updated version
+
+    Args:
+        force: Re-ingest all PDFs even if already indexed (default False).
+
+    Returns:
+        JSON with n_ingested, n_skipped, n_failed, and per-file results.
+    """
+    try:
+        with _client() as c:
+            r = c.post("/documents/ingest", params={"force": str(force).lower()})
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPStatusError as exc:
+        return _err(f"Ingest failed ({exc.response.status_code}): {exc.response.text}")
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
+def tool_search_research_documents(query: str, n_results: int = 5) -> str:
+    """
+    Semantically search the indexed research documents and return relevant excerpts.
+
+    Uses a local sentence-transformers embedding model (BAAI/bge-small-en-v1.5)
+    and ChromaDB cosine-similarity search — no external API required.
+
+    WORKFLOW:
+      1. If the store might be empty, call list_research_documents() first.
+      2. If empty, call ingest_research_documents() to index the PDFs.
+      3. Then call this tool with the user's question.
+
+    After receiving results, synthesise a clear answer from the returned chunks,
+    always citing the source PDF filename and chunk index for each piece of
+    information used.
+
+    Args:
+        query:     Natural-language question (e.g. "What is the Young's modulus
+                   of the catheter material?").
+        n_results: Number of chunks to retrieve (default 5, max 20).
+
+    Returns:
+        JSON with query, total_hits, and hits list (text, source, chunk_index, score).
+        Score is cosine similarity in [0, 1] — higher means more relevant.
+    """
+    try:
+        with _client() as c:
+            r = c.post(
+                "/documents/search",
+                json={"query": query, "n_results": n_results},
+            )
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 503:
+            return _err(
+                "No documents indexed. "
+                "Call ingest_research_documents() first to index the research_documents/ folder."
+            )
+        return _err(f"Search failed ({exc.response.status_code}): {exc.response.text}")
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
 def tool_preview_doe_speeds(
     n_samples: int = 10,
     speed_min: float = 10.0,
