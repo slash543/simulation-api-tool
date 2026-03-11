@@ -1,455 +1,159 @@
 # Digital Twin UI
 
-A production-quality Python platform that automates catheter insertion simulations,
-performs Design of Experiments (DOE), builds a machine-learning dataset, and serves
-predictions through a FastAPI interface.
+A platform that automates catheter insertion FEM simulations, runs Design of Experiments campaigns, builds an ML dataset, and serves predictions through a REST API — with an AI agent interface via LibreChat.
 
 ---
 
-## Overview
+## Quick Start
 
-The platform wraps a catheter-in-urethra finite element simulation.  It modifies
-simulation input files to sweep insertion speed, runs the solver, extracts contact
-pressure from the results, feeds the data to an MLP, and exposes everything through
-a REST API and a Celery task queue.
+```bash
+git clone https://github.com/slash543/simulation-api-tool.git
+cd simulation-api-tool
+chmod +x setup.sh && ./setup.sh
+docker compose -f docker-compose.librechat.yml up --build -d
+```
 
-```
-API request
-     │
-     ▼
-Task queue (Celery + Redis)
-     │
-     ▼
-DOE sampler  ──► Simulation Configurator  ──► Solver (febio4 -i input.feb)
-                                                       │
-                                                       ▼
-                                               Result extraction (.xplt)
-                                                       │
-                                                       ▼
-                                               CSV / Parquet dataset
-                                                       │
-                                                       ├──► MLflow experiment log
-                                                       │
-                                                       ▼
-                                               PyTorch MLP training
-                                                       │
-                                                       ▼
-                                               FastAPI  /ml/predict
-```
+Open **http://localhost:3080**, register an account, and start chatting with the Simulation Assistant.
+
+> **First run:** Ollama downloads `qwen2.5:7b` (~4.7 GB). Watch progress with:
+> ```bash
+> docker compose -f docker-compose.librechat.yml logs -f ollama-init
+> # Wait for: "Model pull complete."
+> ```
 
 ---
 
-## Simulation Physics
+## Prerequisites
 
-| Parameter | Value |
+| Requirement | Notes |
 |---|---|
-| Solver | `febio4` (single processor) |
-| Run command | `febio4 -i input.feb` |
-| Analysis | 2-step static |
-| Step 1 (clamping) | t = 0 → 2 s, 40 increments |
-| Step 2 (insertion) | t = 2 s → `2 + D/v`, increments = `D/(v·dt)` |
-| Prescribed displacement D | 10 mm per step |
-| Default step size dt | 0.05 s |
-| DOE speed range | 4 – 6 mm/s |
-| Default speed | 5 mm/s |
+| Docker + Docker Compose v2 | `docker compose version` must work |
+| FEBio 4 | Install from [febio.org/downloads](https://febio.org/downloads/) — `setup.sh` auto-detects it |
+| `openssl` | Usually pre-installed; used by `setup.sh` to generate secrets |
 
-Speed → time mapping:
+---
 
+## What `setup.sh` does
+
+Run once after cloning. It handles everything so you don't need to:
+
+1. Checks Docker, Docker Compose, and openssl are available
+2. Scans all required ports for conflicts and tells you exactly how to free them
+3. Finds the FEBio binary and writes its path to `.env`
+4. Creates the `runs/` directory and sets `RUNS_HOST_PATH` in `.env`
+5. Generates `.env.librechat` with fresh cryptographic secrets (JWT, credentials encryption, Meilisearch)
+6. Prints the complete startup guide
+
+---
+
+## Starting the stack
+
+```bash
+docker compose -f docker-compose.librechat.yml up --build -d
 ```
-speed = 4 mm/s  →  duration = 2.50 s  →  50 increments  →  LC end = 4.500
-speed = 5 mm/s  →  duration = 2.00 s  →  40 increments  →  LC end = 4.000  (default)
-speed = 6 mm/s  →  duration = 1.67 s  →  33 increments  →  LC end = 3.667
+
+**Check all services are running:**
+
+```bash
+docker compose -f docker-compose.librechat.yml ps
+```
+
+**Stop the stack:**
+
+```bash
+docker compose -f docker-compose.librechat.yml down
 ```
 
 ---
 
-## Project Structure
+## Services and ports
 
-```
-simulation-api-tool/
-├── digital_twin_ui/            # Main Python package
-│   ├── app/
-│   │   ├── api/
-│   │   │   ├── routes/         # FastAPI route handlers
-│   │   │   └── schemas/        # Pydantic request/response models
-│   │   └── core/
-│   │       ├── config.py       # Settings (YAML + env overrides)
-│   │       └── logging.py      # Structured logging (loguru)
-│   ├── simulation/
-│   │   ├── simulation_configurator.py  # Modifies .feb for target speed
-│   │   ├── simulation_runner.py        # Runs febio4, captures output
-│   │   └── simulation_monitor.py       # Polls log for NORMAL TERMINATION
-│   ├── extraction/
-│   │   └── xplt_parser.py      # Reads .xplt, extracts contact pressure
-│   ├── doe/
-│   │   ├── sampler.py          # LHS / Sobol / uniform samplers
-│   │   └── doe_pipeline.py     # Orchestrates DOE campaign
-│   ├── experiments/
-│   │   └── mlflow_manager.py   # MLflow experiment & run helpers
-│   ├── ml/
-│   │   ├── dataset.py          # Dataset builder (Parquet)
-│   │   ├── model.py            # MLP architecture
-│   │   ├── trainer.py          # Train loop with early stopping
-│   │   └── inference.py        # Load model, run predictions
-│   ├── tasks/
-│   │   ├── celery_app.py       # Celery application factory
-│   │   └── simulation_tasks.py # Async simulation & training tasks
-│   ├── services/
-│   │   ├── simulation_service.py
-│   │   ├── dataset_service.py
-│   │   └── training_service.py
-│   └── utils/
-├── tests/
-│   ├── conftest.py                         # Shared fixtures
-│   ├── test_config.py                      # Configuration tests
-│   ├── test_logging.py                     # Logging tests
-│   └── test_simulation_configurator.py     # Simulation configurator tests
-├── config/
-│   └── simulation.yaml         # All tunable parameters
-├── templates/
-│   └── sample_catheterization.feb          # Base simulation template
-├── runs/                        # Auto-created per-run directories
-├── data/
-│   ├── raw/                     # Per-run CSV extractions
-│   └── datasets/                # Merged Parquet dataset
-├── models/                      # Saved PyTorch checkpoints
-├── requirements.txt
-├── requirements-dev.txt
-└── pyproject.toml
-```
-
----
-
-## Setup
-
-### 1. Create and activate a virtual environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate      # Linux / macOS
-# .venv\Scripts\activate       # Windows
-```
-
-### 2. Install dependencies
-
-```bash
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-```
-
-### 3. Add the package to the Python path
-
-```bash
-echo "$PWD" > .venv/lib/python3.12/site-packages/digital_twin_ui.pth
-```
-
-### 4. Verify installation
-
-```bash
-python -c "import digital_twin_ui; print(digital_twin_ui.__version__)"
-# → 0.1.0
-```
-
----
-
-## Configuration
-
-All parameters live in `config/simulation.yaml`.
-
-```yaml
-simulation:
-  simulator_executable: "febio4"   # command name on PATH
-  simulator_args: ["-i"]           # assembled as: febio4 -i input.feb
-  displacement_mm: 10.0
-  default_step_size: 0.05
-  loadcurve_start_time: 2.0
-
-doe:
-  speed_min_mm_s: 4.0
-  speed_max_mm_s: 6.0
-  default_sampler: "lhs"           # lhs | sobol | uniform
-  default_num_samples: 10
-
-mlflow:
-  tracking_uri: "mlruns"
-  experiment_name: "catheter_insertion"
-
-ml:
-  hidden_dims: [64, 128, 256]
-  learning_rate: 0.001
-  max_epochs: 500
-  patience: 20
-```
-
-### Environment variable overrides
-
-Any YAML value can be overridden without editing the file:
-
-```bash
-DTUI__SIMULATION__SIMULATOR_EXECUTABLE=febio4-avx2  # use different binary
-DTUI__API__PORT=9000                                 # change API port
-DTUI__ML__LEARNING_RATE=0.0005
-```
-
-Pattern: `DTUI__<SECTION>__<FIELD>=<value>`
-
----
-
-## Running Tests
-
-```bash
-# All tests
-pytest tests/ -v
-
-# Fast tests only (skip slow integration tests)
-pytest tests/ -v -m "not integration"
-
-# Integration tests only (require real template)
-pytest tests/ -v -m integration
-
-# With coverage report
-pytest tests/ --cov=digital_twin_ui --cov-report=term-missing
-```
-
-### Test organisation
-
-| File | What it covers |
-|---|---|
-| `tests/conftest.py` | Shared fixtures: `project_root`, `template_feb`, `minimal_feb`, `patch_env`, `clean_settings_cache`, `reset_logging_state` |
-| `tests/test_config.py` | All `Settings` sub-models, derived paths, YAML loading, env overrides, singleton cache (52 tests) |
-| `tests/test_logging.py` | JSON serialiser, file sinks, `_configured` flag lifecycle, `get_logger` interface (22 tests) |
-| `tests/test_simulation_configurator.py` | Physics formulas, XML helpers, XML modification, content preservation, error paths, idempotency (62 tests) |
-
-### Test markers
-
-| Marker | Usage |
-|---|---|
-| `integration` | Tests using the full 17 000-line simulation template. Run slower but validate the real file. |
-
----
-
-## Usage Examples
-
-### Modify a simulation file for a target speed
-
-```python
-from pathlib import Path
-from digital_twin_ui.simulation.simulation_configurator import configure_simulation
-
-result = configure_simulation(
-    speed_mm_s=4.5,
-    output_path=Path("runs/run_0001/input.feb"),
-)
-
-print(f"LC end time : {result.lc_end_time:.4f} s")
-print(f"Time steps  : {result.time_steps_step2}")
-print(f"Output      : {result.output_path}")
-```
-
-```
-LC end time : 4.2222 s
-Time steps  : 44
-Output      : runs/run_0001/input.feb
-```
-
-### Load configuration
-
-```python
-from digital_twin_ui.app.core.config import get_settings
-
-cfg = get_settings()
-print(cfg.simulation.simulator_executable)  # febio4
-print(cfg.simulation.simulator_args)        # ['-i']
-print(cfg.doe.speed_min_mm_s)               # 4.0
-```
-
-### Initialise logging
-
-```python
-from digital_twin_ui.app.core.logging import configure_from_settings, get_logger
-
-configure_from_settings()   # call once at startup
-
-logger = get_logger(__name__)
-logger.info("Platform ready")
-
-with logger.contextualize(run_id="run_0001", speed=4.5):
-    logger.debug("Simulation step started")
-```
-
----
-
-## Implementation Progress
-
-| Step | Module | Status |
+| Port | Service | Purpose |
 |---|---|---|
-| 1 | Project structure | Done |
-| 2 | Configuration system | Done |
-| 3 | Logging | Done |
-| 3 | Simulation Configurator | Done |
-| 4 | Simulation Runner | Done |
-| 5 | Simulation Monitor | Done |
-| 6 | DOE Sampler | Done |
-| 7 | Result Extraction | Done |
-| 8 | MLflow Integration | Done |
-| 9 | Task Queue (Celery) | Done |
-| 10 | FastAPI Endpoints | Done |
-| 11 | Dataset Builder | Done |
-| 12 | PyTorch Training | Done |
-| 13 | Full Test Suite | Ongoing |
-| 13b | Per-facet tracking pipeline | Done |
-| 14 | Docker | Done |
-| 15 | LibreChat + Ollama + MCP Integration | Done |
+| 3080 | LibreChat UI | Main chat interface |
+| 8000 | Simulation API | FastAPI REST endpoints |
+| 8001 | MCP Server | Tool bridge between agent and API |
+| 5000 | MLflow | Experiment tracking |
+| 6379 | Redis | Celery task queue |
+| 11434 | Ollama | Local LLM |
+| 7700 | Meilisearch | LibreChat search index |
+| 27017 | MongoDB | LibreChat database |
 
 ---
 
-## Step 15 — LibreChat + Ollama + MCP Integration
+## LLM Strategy — Azure OpenAI (primary) + Ollama (fallback)
 
-### Architecture
+The stack runs with **Ollama out of the box** — no credentials needed.  Azure OpenAI can be enabled later for faster, higher-quality responses.
 
-```
-User  ──►  LibreChat UI (port 3080)
-                │
-                │  OpenAI-compat API (Ollama qwen2.5:7b)
-                ▼
-           Ollama (port 11434)
-                │
-                │  tool calls via MCP (SSE)
-                ▼
-         MCP Server (port 8001)   ← mcp_server/server.py
-                │
-                │  HTTP calls
-                ▼
-         FastAPI (port 8000)  ← existing simulation API
-                │
-        ┌───────┴────────┐
-        Celery Worker   MLflow (port 5000)
-        (FEBio sims)    (experiment tracking)
-```
+| Endpoint | Requires | Works without credentials |
+|---|---|---|
+| Azure OpenAI (`gpt-4o`) | Azure API key | Listed in UI; returns 401 until configured |
+| Ollama (local) | Nothing | Fully functional immediately |
 
-The **MCP server** is the portability layer — any MCP-compatible client
-(LibreChat, Claude Desktop, VS Code Copilot Chat, …) can connect to it at
-`http://<host>:8001/sse` without changes to the simulation back-end.
+### Activating Azure OpenAI
 
-### LLM Strategy — Azure OpenAI (primary) + Ollama (fallback)
-
-LibreChat is configured with **two endpoints** that are always present in the UI:
-
-| Endpoint | Model | Requires | Status without credentials |
-|---|---|---|---|
-| Azure OpenAI | `gpt-4o` | Azure API key + instance | Listed in UI; calls return 401 |
-| Ollama (local) | `qwen2.5:7b` | Nothing (runs locally) | Fully functional |
-
-**Without Azure credentials**, LibreChat starts normally and Ollama handles all
-requests.  The Azure endpoint appears in the model selector but any attempt to use
-it returns an authentication error from Azure — no credentials are sent.
-
-**When Azure credentials are available**, update `.env.librechat` (see below) and
-restart the container.  LibreChat will prefer `SimAssistant-Azure` (listed first in
-`modelSpecs` with `prioritize: true`) while Ollama remains as fallback.
-
-### Quick Start
-
-```bash
-# 1. Prepare environment files
-cp .env.librechat.example .env.librechat
-
-# Generate required secrets (each command prints the value to paste):
-openssl rand -hex 32   # → JWT_SECRET
-openssl rand -hex 32   # → JWT_REFRESH_SECRET
-openssl rand -hex 32   # → CREDS_KEY  (must be exactly 64 hex chars)
-openssl rand -hex 16   # → CREDS_IV   (must be exactly 32 hex chars)
-openssl rand -hex 24   # → MEILI_MASTER_KEY
-
-# 2. Start the full stack (first run pulls qwen2.5:7b — ~4.7 GB)
-docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build
-
-# 3. Open http://localhost:3080 and register an account
-
-# 4. Create the Simulation Assistant agent (optional — can also be done in the UI)
-python scripts/setup-agent.py \
-    --url http://localhost:3080 \
-    --username you@example.com \
-    --password your_password
-```
-
-### Activating Azure OpenAI (when credentials are available)
-
-Edit `.env.librechat` and replace the placeholder values:
+Edit `.env.librechat` and fill in your Azure values:
 
 ```dotenv
-# Before (placeholders — LibreChat starts but Azure calls return 401):
-AZURE_OPENAI_API_KEY=not-configured
-AZURE_OPENAI_INSTANCE_NAME=not-configured
-
-# After (real credentials):
 AZURE_OPENAI_API_KEY=<your-key-from-Azure-portal>
-AZURE_OPENAI_INSTANCE_NAME=<your-resource-name>   # e.g. my-openai-eastus
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o               # your deployment name
+AZURE_OPENAI_INSTANCE_NAME=<resource-name>        # e.g. my-openai-eastus
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 AZURE_OPENAI_MINI_DEPLOYMENT_NAME=gpt-4o-mini
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
 ```
 
-Then recreate the container (restart alone does not reload `env_file`):
+Then recreate the LibreChat container (restart alone does not reload `env_file`):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d librechat
+docker compose -f docker-compose.librechat.yml up -d librechat
 ```
 
-> **Why `not-configured` placeholders?**  LibreChat validates that every
-> `${VAR}` reference in `librechat.yaml` maps to a real environment variable at
-> startup — if any is missing, the process crashes before serving requests.  The
-> placeholder values satisfy the validation so the app starts; actual Azure API
-> traffic is only sent when the user selects the Azure endpoint and makes a chat
-> request.
-
-### LLM Choices (Ollama)
-
-| Model | RAM | Quality | Tool calling |
-|---|---|---|---|
-| `qwen2.5:7b` | 4.7 GB | ★★★★ | Excellent (default) |
-| `qwen2.5:14b` | 9 GB | ★★★★★ | Excellent |
-| `llama3.1:8b` | 4.7 GB | ★★★★ | Very good |
-| `qwen2.5:3b` | 2 GB | ★★★ | Good |
-
-To switch Ollama model, update the model name in `librechat.yaml` and in the
-`ollama-init` service command in `docker-compose.librechat.yml`.
-
-### Creating the Agent in the LibreChat UI
-
-1. Click **New Agent** (left sidebar → Agent icon)
-2. Name: `Simulation Assistant`
-3. Endpoint: `Ollama (local)` (or `azureOpenAI` if credentials are set) · Model: `qwen2.5:7b`
-4. Paste the system prompt from `librechat.yaml` → `modelSpecs.list[0].preset.system`
-5. Under **Tools** → enable all tools from `simulation-tools`
-6. Save and start chatting
-
-### Example Conversations
-
-> *"Run a simulation at 5 mm/s and tell me the peak contact pressure."*
-
-> *"Generate a DOE database with 20 samples between 2 and 10 mm/s using Latin Hypercube sampling."*
-
-> *"Predict the pressure at 3, 5, 7, and 9 mm/s — which speed is safest?"*
-
-### Connecting a Different Chat Interface
-
-The MCP server exposes a standard SSE endpoint at `http://<host>:8001/sse`.
-Add it to any MCP-compatible client:
-
-| Client | Config location |
-|---|---|
-| Claude Desktop | `claude_desktop_config.json` → `mcpServers` |
-| VS Code (GitHub Copilot) | `.vscode/mcp.json` |
-| Any LibreChat instance | `librechat.yaml` → `mcpServers` |
+> **Why `not-configured` placeholders?** LibreChat validates every `${VAR}` in `librechat.yaml` at startup — missing variables crash the process. The placeholders let it start cleanly; Azure traffic is only sent when you actually select the Azure endpoint in the UI.
 
 ---
 
-## RAG Document Search
+## Simulation results
 
-The platform includes a fully local, offline-capable retrieval-augmented generation (RAG) pipeline for searching research documents.  Drop any PDF into `research_documents/` and the agent can answer questions about it — with citations.
+Every run writes files to `runs/run_YYYYMMDD_HHMMSS_xxxx/` on your host machine:
 
-### Stack — all open-source, commercial use permitted
+| File | Purpose |
+|---|---|
+| `input.xplt` | FEBio result — open in FEBio Studio: **File → Open** |
+| `log.txt` | Live solver progress |
+| `input.feb` | Configured input file used for this run |
+
+---
+
+## Research Documents (RAG)
+
+Add PDFs to `research_documents/` and the agent can answer questions about them with source citations.
+
+### Adding documents
+
+```bash
+# Drop PDFs into the folder
+cp my_paper.pdf research_documents/
+
+# Then in the chat: "Please index the research documents"
+# Or via the API:
+curl -X POST http://localhost:8000/api/v1/documents/ingest
+```
+
+Force re-ingest after replacing a PDF:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/documents/ingest?force=true"
+```
+
+### Asking questions
+
+> *"What material model is used for the urethra tissue?"*
+> *"What is the Young's modulus of the catheter body?"*
+> *"Explain the contact algorithm used in FEBio."*
+
+The agent retrieves relevant chunks and cites the source PDF for every piece of information.
+
+### RAG stack — all open-source, commercial use permitted
 
 | Component | Library | License |
 |---|---|---|
@@ -457,119 +161,82 @@ The platform includes a fully local, offline-capable retrieval-augmented generat
 | Embeddings | `sentence-transformers` (BAAI/bge-small-en-v1.5) | Apache 2.0 / MIT |
 | Vector store | `chromadb` | Apache 2.0 |
 
-Everything runs locally — no external API calls, no usage fees.  The embedding model (~130 MB) is downloaded once to the HuggingFace cache on first use.
+Everything runs locally — no external API calls required.
 
-### Adding a document
+---
 
-1. Copy your PDF into `research_documents/`.
-2. Trigger ingestion (one of):
-   - **Via the agent**: ask *"Please index the research documents"* — the agent calls `ingest_research_documents()`.
-   - **Via the API**: `POST http://localhost:8000/api/v1/documents/ingest`
-   - **Force re-ingest** after replacing a PDF: add `?force=true`
+## Catheter Designs
 
-### Asking questions
+The agent guides the user through design selection before running a simulation:
 
-Once indexed, the agent automatically searches documents when you ask relevant questions:
+1. **Choose tip design** — Ball Tip, Nelaton Tip, or Vapro Introducer
+2. **Choose configuration** — catheter size × urethra model (e.g. 14Fr IR12, 16Fr IR12)
+3. **Provide 10 insertion speeds** (one per step), or ask for a uniform value between 10–25 mm/s
 
-> *"What material model is used for the urethra tissue?"*
-> *"What is the Young's modulus of the catheter body?"*
-> *"Explain the contact algorithm used in FEBio."*
+Base FEB files live in `base_configuration/`.  Replace any file with updated geometry and the system continues to work — only load curve timings and step counts are modified, never geometry or materials.
 
-The agent retrieves the most relevant chunks and cites the source PDF for every piece of information it uses.
+---
 
-### REST API endpoints
+## Troubleshooting
 
-```
-GET  /api/v1/documents/list            List indexed PDFs and total chunk count
-POST /api/v1/documents/ingest          Scan research_documents/ and index new PDFs
-POST /api/v1/documents/ingest?force=true  Re-ingest all PDFs (use after replacing a file)
-POST /api/v1/documents/search          Semantic search
-```
-
-Search request / response:
-
-```json
-POST /api/v1/documents/search
-{ "query": "catheter material Young's modulus", "n_results": 5 }
-
-{
-  "query": "catheter material Young's modulus",
-  "total_hits": 3,
-  "hits": [
-    {
-      "text": "The catheter body uses a neo-Hookean model with E = 11.25 MPa...",
-      "source": "FEBio Users Manual.pdf",
-      "chunk_index": 42,
-      "score": 0.921
-    }
-  ]
-}
-```
-
-### MCP tools (available to the agent)
-
-| Tool | Description |
-|---|---|
-| `list_research_documents()` | Show what PDFs are currently indexed |
-| `ingest_research_documents(force)` | Index new PDFs from `research_documents/` |
-| `search_research_documents(query, n_results)` | Semantic search with source citations |
-
-### Ingestion pipeline (per PDF)
-
-```
-PDF file
-  │
-  ▼
-docling (text-layer PDFs + scanned/OCR PDFs)
-  │
-  ▼
-Clean Markdown (headings, tables, lists preserved)
-  │
-  ▼
-512-character overlapping chunks (64-char overlap)
-  │
-  ▼
-sentence-transformers embed (BAAI/bge-small-en-v1.5, L2-normalised)
-  │
-  ▼
-ChromaDB upsert  →  data/chroma/  (persistent on disk)
-```
-
-### Configuration
-
-RAG settings can be overridden in `config/simulation.yaml` or via environment variables:
-
-```yaml
-rag:
-  documents_dir: research_documents   # folder to scan for PDFs
-  chroma_dir: data/chroma             # ChromaDB persistence directory
-  embedding_model: BAAI/bge-small-en-v1.5
-  chunk_size: 512
-  chunk_overlap: 64
-```
-
+**Ollama "model not found" in LibreChat**
+The model is still downloading. Check progress:
 ```bash
-DTUI__RAG__CHUNK_SIZE=1024        # larger chunks for longer context
-DTUI__RAG__EMBEDDING_MODEL=BAAI/bge-base-en-v1.5   # larger model for better accuracy
+docker compose -f docker-compose.librechat.yml logs ollama-init
+```
+Wait for `"Model pull complete."` then refresh LibreChat.
+
+**Port already in use**
+```bash
+sudo lsof -i TCP:<port> -sTCP:LISTEN   # find the PID
+sudo kill -9 <PID>
+# or: sudo fuser -k <port>/tcp
+```
+Re-run `setup.sh` to verify all ports are free.
+
+**Simulation fails (exit 127)**
+FEBio binary path is wrong. Check:
+```bash
+cat .env | grep FEBIO_BINARY_PATH
+```
+Update the path and restart the worker:
+```bash
+docker compose -f docker-compose.librechat.yml restart worker
+```
+
+**LibreChat won't start**
+```bash
+docker compose -f docker-compose.librechat.yml logs librechat --tail=50
 ```
 
 ---
 
-## Requirements
+## Architecture
 
-- Python 3.11+
-- `febio4` on `$PATH`
-- Redis (for Celery task queue)
-- CUDA-capable GPU (optional — PyTorch falls back to CPU)
+```
+User  ──►  LibreChat UI  (port 3080)
+                │
+                │  tool calls via MCP (SSE)
+                ▼
+          MCP Server  (port 8001)
+                │
+                │  HTTP
+                ▼
+          Simulation API  (port 8000, FastAPI)
+                │
+       ┌────────┼─────────┐
+       ▼        ▼         ▼
+  Celery     MLflow    ChromaDB
+  Worker    (port 5000)  (local)
+  (FEBio)
+```
 
 ---
 
 ## License
 
-This project is released under the **MIT License** — see [`LICENSE`](LICENSE).
+MIT — free for commercial use.
 
-All dependencies are free for commercial use (MIT, Apache 2.0, BSD-3-Clause, PSF).
-See [`LICENSES.md`](LICENSES.md) for the full audit, including version-lock rationale
-for Redis (stay on v7, not v8) and Meilisearch (stay on v1.7.3, not v1.19+).
+All dependencies are Apache 2.0, MIT, BSD-3-Clause, or PSF licensed.
 
 > Research prototype. Not for clinical use.
