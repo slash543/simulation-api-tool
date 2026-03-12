@@ -34,6 +34,7 @@ Usage
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,36 @@ logger = get_logger(__name__)
 
 _CATALOGUE_FILE = "config/catheter_catalogue.yaml"
 _FEB_SUBDIR = "base_configuration"
+
+# ---------------------------------------------------------------------------
+# Filename parsing
+# ---------------------------------------------------------------------------
+
+# Pattern: <design_key>_<size>Fr[optional extra words]_ir<ir_value>
+# Case-insensitive on the "Fr" / "ir" literals.
+# Examples handled:
+#   ball_tip_14FR_ir12         → ('ball_tip',          '14', '12')
+#   nelaton_tip_16Fr_ir25      → ('nelaton_tip',        '16', '25')
+#   vapro_introducer_14Fr_tip_ir12 → ('vapro_introducer', '14', '12')
+_FEB_RE = re.compile(r"^(.+?)_(\d+)[Ff][Rr].*?_ir(\d+)$")
+
+
+def _parse_feb_filename(stem: str) -> tuple[str, str, str] | None:
+    """Parse a .feb filename stem to (design_key, size_fr, ir_value) or None."""
+    m = _FEB_RE.match(stem)
+    if m:
+        return m.group(1), m.group(2), m.group(3)
+    return None
+
+
+def _design_label_from_key(design_key: str) -> str:
+    """Convert a snake_case design key to a human-readable label.
+
+    Examples:
+        'ball_tip'          → 'Ball Tip'
+        'vapro_introducer'  → 'Vapro Introducer'
+    """
+    return " ".join(w.capitalize() for w in design_key.split("_"))
 
 
 # ---------------------------------------------------------------------------
@@ -250,10 +281,91 @@ class CatheterCatalogue:
         )
 
         logger.info(
-            "CatheterCatalogue loaded {n} designs: {names}",
+            "CatheterCatalogue loaded {n} designs from YAML: {names}",
             n=len(self._designs),
             names=", ".join(d.name for d in self._designs),
         )
+
+        # Auto-discover any additional .feb files not covered by the YAML
+        self._auto_discover()
+
+    def _auto_discover(self) -> None:
+        """Scan *base_configuration/* and register any .feb files not in the YAML.
+
+        Filename convention (case-insensitive on Fr/ir):
+            ``<design_key>_<size>Fr[_<extra>]_ir<ir_value>.feb``
+
+        Examples::
+            ball_tip_14FR_ir12.feb         → ball_tip / 14Fr_IR12
+            vapro_introducer_14Fr_tip_ir12.feb → vapro_introducer / 14Fr_IR12
+
+        Any file whose stem cannot be parsed is silently skipped.
+        Already-registered files are skipped by filename comparison.
+        New designs not yet in the YAML are created automatically.
+        """
+        feb_dir = self._project_root / _FEB_SUBDIR
+        if not feb_dir.exists():
+            return
+
+        # Case-insensitive set of already-registered filenames
+        registered: set[str] = {
+            c.feb_file.lower()
+            for d in self._designs
+            for c in d.configurations
+        }
+
+        # Map design_name → list index for O(1) merge
+        design_index: dict[str, int] = {d.name: i for i, d in enumerate(self._designs)}
+
+        n_new = 0
+        for feb_path in sorted(feb_dir.glob("*.feb")):
+            if feb_path.name.lower() in registered:
+                continue  # already in catalogue
+
+            parsed = _parse_feb_filename(feb_path.stem)
+            if parsed is None:
+                logger.debug(
+                    "Auto-discover: skipping unrecognized filename {f}",
+                    f=feb_path.name,
+                )
+                continue
+
+            design_key, size_fr, ir_val = parsed
+            config_key = f"{size_fr}Fr_IR{ir_val}"
+            new_cfg = CatalogueConfiguration(
+                key=config_key,
+                label=f"{size_fr}Fr catheter — IR{ir_val} urethra model",
+                feb_file=feb_path.name,
+            )
+
+            if design_key in design_index:
+                idx = design_index[design_key]
+                d = self._designs[idx]
+                if config_key not in {c.key for c in d.configurations}:
+                    # CatalogueDesign is frozen — replace with an updated copy
+                    self._designs[idx] = CatalogueDesign(
+                        name=d.name,
+                        label=d.label,
+                        configurations=list(d.configurations) + [new_cfg],
+                    )
+            else:
+                new_design = CatalogueDesign(
+                    name=design_key,
+                    label=_design_label_from_key(design_key),
+                    configurations=[new_cfg],
+                )
+                self._designs.append(new_design)
+                design_index[design_key] = len(self._designs) - 1
+
+            registered.add(feb_path.name.lower())
+            n_new += 1
+            logger.info("Auto-discovered: {f}", f=feb_path.name)
+
+        if n_new:
+            logger.info(
+                "Auto-discover complete: {n} new .feb file(s) registered",
+                n=n_new,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -269,3 +381,13 @@ def get_catalogue() -> CatheterCatalogue:
     if _catalogue_singleton is None:
         _catalogue_singleton = CatheterCatalogue()
     return _catalogue_singleton
+
+
+def reset_catalogue_singleton() -> None:
+    """Reset the singleton so the next call to get_catalogue() reloads from disk.
+
+    Intended for testing and for scenarios where new .feb files have been added
+    and the running process should pick them up without restarting.
+    """
+    global _catalogue_singleton
+    _catalogue_singleton = None

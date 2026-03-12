@@ -408,6 +408,142 @@ class TestTimeout:
 
 
 # ---------------------------------------------------------------------------
+# Cancellation
+# ---------------------------------------------------------------------------
+
+def _make_cancel_proc(returncode: int = -15) -> MagicMock:
+    """
+    Mock proc that simulates a process killed by the cancel watcher.
+
+    terminate() and kill() are no-ops.
+    wait() returns returncode.
+    stdout yields nothing (proc was killed before writing output).
+    """
+    proc = MagicMock()
+    proc.returncode = None  # starts as None — not yet finished
+
+    terminate_called = []
+    kill_called = []
+
+    def _terminate():
+        proc.returncode = returncode
+        terminate_called.append(True)
+
+    proc.terminate = _terminate
+
+    def _kill():
+        proc.returncode = returncode
+        kill_called.append(True)
+
+    proc.kill = _kill
+
+    async def _aiter():
+        return
+        yield  # make it an async generator
+
+    proc.stdout = _aiter()
+
+    async def _wait():
+        return proc.returncode if proc.returncode is not None else returncode
+
+    proc.wait = _wait
+    return proc
+
+
+class TestCancellation:
+    @pytest.mark.asyncio
+    async def test_status_cancelled(self, runner, minimal_feb):
+        """Writing a CANCEL file while the simulation is running marks it CANCELLED."""
+        proc = _make_cancel_proc()
+
+        async def _slow_stream_to_log(p, log_path):
+            """Simulate a long-running process — pause until cancelled."""
+            try:
+                await asyncio.sleep(10)  # would run for 10s normally
+            except asyncio.CancelledError:
+                pass
+            # Write an empty log file
+            log_path.write_bytes(b"")
+
+        with _patch_subprocess(proc):
+            with patch.object(
+                runner,
+                "_stream_to_log",
+                side_effect=_slow_stream_to_log,
+            ):
+                # Schedule writing the CANCEL file after a short delay
+                async def _write_cancel():
+                    await asyncio.sleep(0.05)
+                    cfg = runner._cfg
+                    cancel_file = cfg.runs_dir_abs / "run_cancel_test" / "CANCEL"
+                    cancel_file.touch()
+
+                cancel_writer = asyncio.create_task(_write_cancel())
+                result = await runner.run_async(speed_mm_s=5.0, run_id="run_cancel_test")
+                await cancel_writer
+
+        assert result.status == SimulationStatus.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_message(self, runner, minimal_feb):
+        proc = _make_cancel_proc()
+
+        async def _slow_stream(p, log_path):
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                pass
+            log_path.write_bytes(b"")
+
+        with _patch_subprocess(proc):
+            with patch.object(runner, "_stream_to_log", side_effect=_slow_stream):
+                async def _write_cancel():
+                    await asyncio.sleep(0.05)
+                    (runner._cfg.runs_dir_abs / "run_cancel_errmsg" / "CANCEL").touch()
+
+                t = asyncio.create_task(_write_cancel())
+                result = await runner.run_async(speed_mm_s=5.0, run_id="run_cancel_errmsg")
+                await t
+
+        assert result.error_message is not None
+        assert "Cancelled" in result.error_message or "cancelled" in result.error_message.lower()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_metadata_written(self, runner, minimal_feb):
+        proc = _make_cancel_proc()
+
+        async def _slow_stream(p, log_path):
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                pass
+            log_path.write_bytes(b"")
+
+        with _patch_subprocess(proc):
+            with patch.object(runner, "_stream_to_log", side_effect=_slow_stream):
+                async def _write_cancel():
+                    await asyncio.sleep(0.05)
+                    (runner._cfg.runs_dir_abs / "run_cancel_meta" / "CANCEL").touch()
+
+                t = asyncio.create_task(_write_cancel())
+                result = await runner.run_async(speed_mm_s=5.0, run_id="run_cancel_meta")
+                await t
+
+        data = json.loads(result.metadata_file.read_text())
+        assert data["status"] == "CANCELLED"
+
+    @pytest.mark.asyncio
+    async def test_no_cancel_file_completes_normally(self, runner, success_proc, minimal_feb):
+        """Without a CANCEL file, the simulation completes normally."""
+        with _patch_subprocess(success_proc):
+            result = await runner.run_async(speed_mm_s=5.0, run_id="run_no_cancel")
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_cancelled_status_in_enum(self):
+        assert SimulationStatus.CANCELLED == "CANCELLED"
+
+
+# ---------------------------------------------------------------------------
 # Pre-execution failure (configurator raises)
 # ---------------------------------------------------------------------------
 

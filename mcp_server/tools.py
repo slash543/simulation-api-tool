@@ -323,6 +323,40 @@ def tool_run_catheter_simulation(
         return _err(f"Request error: {exc}")
 
 
+def tool_cancel_simulation(task_id: str, run_id: str) -> str:
+    """
+    Cancel a running or queued simulation.
+
+    Writes a cancellation sentinel in the run directory (picked up by the
+    worker within ~1 second) and revokes the Celery task.
+
+    Call this when the user asks to stop, abort, or kill a simulation.
+    Both task_id and run_id are returned by run_catheter_simulation() and
+    run_simulation() when the job is submitted.
+
+    Args:
+        task_id: Celery task ID from the submission response.
+        run_id:  Run identifier from the submission response.
+
+    Returns:
+        JSON with run_id, task_id, status='CANCELLATION_REQUESTED', message.
+    """
+    try:
+        with _client() as c:
+            r = c.post(
+                "/simulations/cancel",
+                json={"task_id": task_id, "run_id": run_id},
+            )
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPStatusError as exc:
+        return _err(
+            f"Cancel failed ({exc.response.status_code}): {exc.response.text}"
+        )
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # RAG document tools
 # ---------------------------------------------------------------------------

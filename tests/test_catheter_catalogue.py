@@ -244,6 +244,213 @@ class TestUniformSpeeds:
 
 
 # ===========================================================================
+# Auto-discovery tests
+# ===========================================================================
+
+
+class TestParseFebFilename:
+    """Unit tests for the _parse_feb_filename() helper."""
+
+    def _parse(self, stem: str):
+        from digital_twin_ui.simulation.catheter_catalogue import _parse_feb_filename
+        return _parse_feb_filename(stem)
+
+    def test_ball_tip_14fr_ir12(self):
+        assert self._parse("ball_tip_14FR_ir12") == ("ball_tip", "14", "12")
+
+    def test_ball_tip_14fr_ir25(self):
+        assert self._parse("ball_tip_14FR_ir25") == ("ball_tip", "14", "25")
+
+    def test_ball_tip_16fr_ir12(self):
+        assert self._parse("ball_tip_16FR_ir12") == ("ball_tip", "16", "12")
+
+    def test_nelaton_tip_lowercase_fr(self):
+        assert self._parse("nelaton_tip_14Fr_ir12") == ("nelaton_tip", "14", "12")
+
+    def test_nelaton_tip_16fr(self):
+        assert self._parse("nelaton_tip_16Fr_ir12") == ("nelaton_tip", "16", "12")
+
+    def test_vapro_introducer_with_extra_word(self):
+        # vapro_introducer_14Fr_tip_ir12 has an extra '_tip' between Fr and ir
+        assert self._parse("vapro_introducer_14Fr_tip_ir12") == ("vapro_introducer", "14", "12")
+
+    def test_vapro_introducer_16fr(self):
+        assert self._parse("vapro_introducer_16Fr_tip_ir12") == ("vapro_introducer", "16", "12")
+
+    def test_unrecognized_returns_none(self):
+        assert self._parse("sample_catheterization") is None
+
+    def test_no_ir_suffix_returns_none(self):
+        assert self._parse("ball_tip_14Fr") is None
+
+    def test_future_design_key(self):
+        # A new design added later should also parse correctly
+        result = self._parse("tiemann_tip_14Fr_ir12")
+        assert result == ("tiemann_tip", "14", "12")
+
+
+class TestDesignLabelFromKey:
+    def _label(self, key: str) -> str:
+        from digital_twin_ui.simulation.catheter_catalogue import _design_label_from_key
+        return _design_label_from_key(key)
+
+    def test_ball_tip(self):
+        assert self._label("ball_tip") == "Ball Tip"
+
+    def test_nelaton_tip(self):
+        assert self._label("nelaton_tip") == "Nelaton Tip"
+
+    def test_vapro_introducer(self):
+        assert self._label("vapro_introducer") == "Vapro Introducer"
+
+    def test_single_word(self):
+        assert self._label("tiemann") == "Tiemann"
+
+
+class TestAutoDiscover:
+    """Tests for CatheterCatalogue._auto_discover() via a real directory scan."""
+
+    def _make_catalogue_with_dir(self, tmp_path: Path, feb_files: list[str]):
+        """Create a minimal catalogue YAML and populate base_configuration/ with stub FEBs."""
+        import yaml
+        from digital_twin_ui.simulation.catheter_catalogue import CatheterCatalogue
+
+        # Minimal YAML with one design (design_a / 14Fr_IR12 only)
+        data = {
+            "designs": {
+                "design_a": {
+                    "label": "Design A",
+                    "configurations": {
+                        "14Fr_IR12": {"label": "14Fr IR12", "feb_file": "design_a_14Fr_ir12.feb"},
+                    },
+                },
+            },
+            "simulation": {
+                "n_steps": 10,
+                "base_step_size": 0.1,
+                "default_dwell_time_s": 1.0,
+                "displacements_mm": [64.0, 46.0] + [28.0] * 8,
+                "speed_range": {"min_mm_s": 10.0, "max_mm_s": 25.0},
+                "default_uniform_speed_mm_s": 15.0,
+            },
+        }
+        cat_path = tmp_path / "catheter_catalogue.yaml"
+        cat_path.write_text(yaml.dump(data), encoding="utf-8")
+
+        base_dir = tmp_path / "base_configuration"
+        base_dir.mkdir()
+        stub_content = "<?xml version='1.0'?><febio_spec/>"
+        for fname in feb_files:
+            (base_dir / fname).write_text(stub_content)
+
+        return CatheterCatalogue(catalogue_path=cat_path, project_root=tmp_path)
+
+    def test_already_registered_not_duplicated(self, tmp_path):
+        """A .feb file listed in the YAML must not appear twice."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["design_a_14Fr_ir12.feb"]
+        )
+        d = cat.get_design("design_a")
+        assert len(d.configurations) == 1
+
+    def test_new_config_added_to_existing_design(self, tmp_path):
+        """A new size/IR variant for an existing design is registered automatically."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path,
+            ["design_a_14Fr_ir12.feb", "design_a_16Fr_ir25.feb"],
+        )
+        d = cat.get_design("design_a")
+        keys = {c.key for c in d.configurations}
+        assert "14Fr_IR12" in keys
+        assert "16Fr_IR25" in keys
+
+    def test_new_design_created(self, tmp_path):
+        """A .feb file for an entirely new design creates a new CatalogueDesign."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path,
+            ["design_a_14Fr_ir12.feb", "tiemann_tip_14Fr_ir12.feb"],
+        )
+        names = {d.name for d in cat.designs}
+        assert "tiemann_tip" in names
+
+    def test_new_design_label_generated(self, tmp_path):
+        """Auto-discovered designs get a title-case label from their key."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["design_a_14Fr_ir12.feb", "tiemann_tip_16Fr_ir25.feb"]
+        )
+        d = cat.get_design("tiemann_tip")
+        assert d.label == "Tiemann Tip"
+
+    def test_unrecognized_file_skipped(self, tmp_path):
+        """Files that don't match the naming convention are silently ignored."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["design_a_14Fr_ir12.feb", "sample_catheterization.feb"]
+        )
+        assert len(cat.designs) == 1
+
+    def test_no_base_config_dir(self, tmp_path):
+        """If base_configuration/ doesn't exist, _auto_discover is a no-op."""
+        import yaml
+        from digital_twin_ui.simulation.catheter_catalogue import CatheterCatalogue
+
+        data = {
+            "designs": {},
+            "simulation": {
+                "n_steps": 10, "base_step_size": 0.1, "default_dwell_time_s": 1.0,
+                "displacements_mm": [28.0] * 10,
+                "speed_range": {"min_mm_s": 10.0, "max_mm_s": 25.0},
+                "default_uniform_speed_mm_s": 15.0,
+            },
+        }
+        cat_path = tmp_path / "cat.yaml"
+        cat_path.write_text(yaml.dump(data))
+        cat = CatheterCatalogue(catalogue_path=cat_path, project_root=tmp_path)
+        assert cat.designs == []
+
+    def test_auto_discovered_config_feb_file_name(self, tmp_path):
+        """The registered feb_file must match the actual filename on disk."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["design_a_14Fr_ir12.feb", "tiemann_tip_16Fr_ir12.feb"]
+        )
+        d = cat.get_design("tiemann_tip")
+        cfg = d.get_configuration("16Fr_IR12")
+        assert cfg.feb_file == "tiemann_tip_16Fr_ir12.feb"
+
+    def test_vapro_introducer_tip_in_name(self, tmp_path):
+        """Files with extra words between Fr and ir (like vapro_introducer_14Fr_tip_ir12) parse correctly."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path,
+            ["design_a_14Fr_ir12.feb", "vapro_introducer_14Fr_tip_ir12.feb"],
+        )
+        names = {d.name for d in cat.designs}
+        assert "vapro_introducer" in names
+        d = cat.get_design("vapro_introducer")
+        assert d.get_configuration("14Fr_IR12").feb_file == "vapro_introducer_14Fr_tip_ir12.feb"
+
+
+class TestResetSingleton:
+    def test_reset_causes_reload(self, tmp_path):
+        from digital_twin_ui.simulation.catheter_catalogue import (
+            get_catalogue,
+            reset_catalogue_singleton,
+        )
+
+        reset_catalogue_singleton()
+        cat1 = get_catalogue()
+        reset_catalogue_singleton()
+        cat2 = get_catalogue()
+        # After reset a new object is created
+        assert cat1 is not cat2
+
+    def test_same_object_without_reset(self):
+        from digital_twin_ui.simulation.catheter_catalogue import get_catalogue
+
+        cat1 = get_catalogue()
+        cat2 = get_catalogue()
+        assert cat1 is cat2
+
+
+# ===========================================================================
 # Integration tests — validate the real catalogue + base_configuration/ files
 # ===========================================================================
 

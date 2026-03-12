@@ -19,6 +19,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from tools import (
+    tool_cancel_simulation,
     tool_get_doe_status,
     tool_get_task_status,
     tool_health_check,
@@ -51,21 +52,33 @@ mcp = FastMCP(
         "  • predict contact pressure instantly using the trained ML model\n"
         "  • poll async task results\n\n"
         "WORKFLOW WHEN USER ASKS TO RUN A SIMULATION:\n"
-        "  1. Call list_catheter_designs() → present the 3 tip designs by label.\n"
-        "  2. Ask: 'Which catheter tip design?' (Ball Tip / Nelaton Tip / Vapro Introducer)\n"
+        "  1. Call list_catheter_designs() → this returns ALL available designs detected\n"
+        "     from the base_configuration/ folder (new .feb files are picked up automatically\n"
+        "     when the stack restarts — no YAML or code changes needed).\n"
+        "     Present every tip design by label.\n"
+        "  2. Ask: 'Which catheter tip design?' (e.g. Ball Tip / Nelaton Tip / Vapro Introducer)\n"
         "  3. Show configurations for the chosen design → ask: 'Which size / urethra model?'\n"
         "     (e.g. 14Fr IR12, 14Fr IR25, 16Fr IR12)\n"
-        "  4. Ask for 10 insertion speeds (one per step), showing the displacement for each step.\n"
-        "     If the user doesn't know → offer:\n"
-        "       a) Uniform speed: ask for a single value (10–25 mm/s), repeat it 10 times.\n"
-        "       b) Call preview_doe_speeds() to show example correlated speed profiles.\n"
-        "  5. Confirm the full speed array with the user, then call run_catheter_simulation().\n\n"
+        "  4. Ask for insertion speeds. The design has 10 steps; you may ask for:\n"
+        "       a) A UNIFORM speed — one value (10–25 mm/s) applied to all 10 steps.\n"
+        "       b) PER-STEP speeds — 10 individual values (one per step).\n"
+        "       c) Call preview_doe_speeds() to show example correlated speed profiles.\n"
+        "     If the user says e.g. '15 mm/s uniform', repeat that value 10 times.\n"
+        "  5. Confirm the full 10-element speed array with the user, then call\n"
+        "     run_catheter_simulation(design, configuration, speeds_mm_s).\n\n"
         "AFTER run_catheter_simulation() RETURNS:\n"
         "  Always tell the user ALL of:\n"
         "  • The simulation is running in the background.\n"
         "  • host_run_dir — folder on their machine where files will appear.\n"
         "  • host_xplt_path — the .xplt file to open in FEBio Studio (File > Open).\n"
-        "  • log.txt inside that folder shows live solver progress.\n\n"
+        "  • log.txt inside that folder shows live solver progress.\n"
+        "  • They can cancel the simulation at any time by asking you to stop/cancel/kill it.\n\n"
+        "CANCELLING A SIMULATION:\n"
+        "  If the user asks to stop, cancel, abort, or kill a running simulation:\n"
+        "  1. You need the task_id and run_id from the original submission response.\n"
+        "     If you don't have them, ask the user.\n"
+        "  2. Call cancel_simulation(task_id, run_id).\n"
+        "  3. Tell the user the simulation will stop within ~1 second.\n\n"
         "Use predict_pressure() for instant ML estimates (requires prior training). "
         "For building a database, prefer run_doe_campaign() with 10–50 samples.\n\n"
         "RESEARCH DOCUMENT WORKFLOW:\n"
@@ -110,6 +123,30 @@ def run_simulation(speed_mm_s: float) -> str:
         JSON with task_id, run_id, host_run_dir, host_xplt_path, status=PENDING.
     """
     return tool_run_simulation(speed_mm_s)
+
+
+@mcp.tool()
+def cancel_simulation(task_id: str, run_id: str) -> str:
+    """
+    Cancel a running or queued simulation immediately.
+
+    Call this when the user asks to stop, abort, cancel, or kill a simulation.
+
+    Mechanism: writes a CANCEL sentinel in the run directory (worker picks it
+    up within ~1 second and kills the FEBio subprocess) and revokes the Celery
+    task.  Returns immediately — cancellation is asynchronous.
+
+    Prerequisites: you need the task_id and run_id from the submission response.
+    Both are returned by run_catheter_simulation() and run_simulation().
+
+    Args:
+        task_id: Celery task ID from the submission response.
+        run_id:  Run identifier from the submission response.
+
+    Returns:
+        JSON with status='CANCELLATION_REQUESTED' and a confirmation message.
+    """
+    return tool_cancel_simulation(task_id, run_id)
 
 
 @mcp.tool()
@@ -273,14 +310,18 @@ def list_catheter_designs() -> str:
 
     ALWAYS call this first when a user asks to run a simulation.
 
-    Presents 3 tip designs: Ball Tip, Nelaton Tip, Vapro Introducer Tip.
-    Each design has 2–3 configurations (catheter size × urethra model).
+    The list is built dynamically: all .feb files in the base_configuration/
+    folder are detected automatically at startup using the filename convention
+    <design>_<size>Fr[_extra]_ir<ir>.feb  (e.g. ball_tip_14Fr_ir12.feb).
+    New designs appear here as soon as the stack is restarted after adding a file.
 
     Conversation flow:
-      1. Call this tool → present the 3 designs by label.
+      1. Call this tool → present all detected tip designs by label.
       2. Ask: "Which catheter tip design would you like?"
       3. Show configurations for the chosen design → ask: "Which size / urethra model?"
-      4. Ask for 10 insertion speeds (one per step), or offer uniform default.
+      4. Ask for insertion speeds:
+           - Uniform: one value repeated 10 times (e.g. 15 mm/s uniform)
+           - Per-step: 10 individual values
       5. Call run_catheter_simulation() with design, configuration, speeds_mm_s.
 
     Returns:
@@ -306,9 +347,9 @@ def run_catheter_simulation(
     Only the load curve time intervals and time_steps counts are modified —
     all geometry, material, and contact definitions are preserved from the base file.
 
-    If the user does not know the 10 speeds, offer:
-      a) A uniform speed — repeat a single value 10 times.
-      b) A preview via preview_doe_speeds() to show example correlated profiles.
+    If the user specifies a single uniform speed (e.g. "15 mm/s"), repeat it
+    10 times automatically. If they specify per-step speeds, use them directly.
+    If they are unsure, call preview_doe_speeds() to show example profiles.
 
     Returns IMMEDIATELY.  ALWAYS tell the user host_run_dir and host_xplt_path.
 

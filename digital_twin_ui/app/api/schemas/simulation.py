@@ -63,6 +63,32 @@ class SimulationRequest(BaseModel):
     )
 
 
+class CancelRequest(BaseModel):
+    """Request body to cancel a running simulation."""
+
+    run_id: str = Field(
+        ...,
+        description="Run identifier returned when the simulation was submitted.",
+        examples=["run_20260310_143000_a1b2"],
+    )
+    task_id: Optional[str] = Field(
+        None,
+        description=(
+            "Celery task ID returned when the simulation was submitted. "
+            "Used to also prevent the task from starting if still queued."
+        ),
+    )
+
+
+class CancelResponse(BaseModel):
+    """Response for a simulation cancellation request."""
+
+    run_id: str
+    task_id: Optional[str] = None
+    status: str = "CANCELLATION_REQUESTED"
+    message: str
+
+
 class DOERequest(BaseModel):
     """Request body for a Design-of-Experiments campaign."""
 

@@ -25,6 +25,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, status
 
 from digital_twin_ui.app.api.schemas.simulation import (
+    CancelRequest,
+    CancelResponse,
     CatalogueDesignEntry,
     CatalogueConfigEntry,
     CatalogueListResponse,
@@ -309,6 +311,65 @@ async def run_simulation_sync(body: SimulationRequest) -> SimulationResultRespon
 async def get_simulation_status(task_id: str) -> TaskStatusResponse:
     """Poll the status of an async simulation task."""
     return _task_status(task_id)
+
+
+# ---------------------------------------------------------------------------
+# Cancel a running simulation
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/simulations/cancel",
+    response_model=CancelResponse,
+    tags=["simulation"],
+)
+async def cancel_simulation(body: CancelRequest) -> CancelResponse:
+    """
+    Request cancellation of a running (or queued) simulation.
+
+    **Mechanism**
+
+    1. Writes a ``CANCEL`` sentinel file inside the run's directory on the
+       shared ``runs/`` volume.  The worker's cancel-watcher detects this
+       within ~1 second and terminates the FEBio subprocess.
+    2. Optionally revokes the Celery task so a queued (not-yet-started) job
+       is also prevented from starting.
+
+    The response is returned immediately — cancellation happens asynchronously.
+    Poll ``GET /simulations/{task_id}`` for the final status (``CANCELLED``).
+
+    Args:
+        body.run_id:  Run identifier returned when the simulation was submitted.
+        body.task_id: Celery task ID (optional, also prevents queued task start).
+    """
+    cfg = get_settings()
+    run_dir = cfg.runs_dir_abs / body.run_id
+
+    if not run_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{body.run_id}' not found.",
+        )
+
+    # Write the CANCEL sentinel file — worker polls this every ~1 second
+    cancel_file = run_dir / "CANCEL"
+    cancel_file.touch()
+    logger.info("Cancel sentinel written", run_id=body.run_id, task_id=body.task_id)
+
+    # Also tell Celery to revoke the task (prevents starting if still PENDING)
+    if body.task_id:
+        app = _get_celery_app()
+        app.control.revoke(body.task_id, terminate=True, signal="SIGTERM")
+
+    return CancelResponse(
+        run_id=body.run_id,
+        task_id=body.task_id,
+        status="CANCELLATION_REQUESTED",
+        message=(
+            f"Cancellation requested for run '{body.run_id}'. "
+            "The simulation will stop within ~1 second if currently running. "
+            "Poll GET /simulations/{task_id} for the final CANCELLED status."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

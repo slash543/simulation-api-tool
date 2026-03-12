@@ -17,8 +17,18 @@
 #
 # Adding a new design
 # -------------------
-# 1. Place the .feb file in base_configuration/
-# 2. Add an entry under designs with the matching feb_file value.
+# SIMPLE WAY (recommended):
+#   Just drop the .feb file in base_configuration/ using the naming convention:
+#     <design_key>_<size>Fr[_<extra>]_ir<ir_value>.feb
+#   Examples:
+#     tiemann_tip_14Fr_ir12.feb   → "Tiemann Tip", 14Fr, IR12
+#     ball_tip_18Fr_ir12.feb      → "Ball Tip",    18Fr, IR12
+#   The file is auto-detected and registered at the next stack restart.
+#   No YAML or code changes needed.
+#
+# OPTIONAL — add an entry here to override the auto-generated label:
+#   1. Place the .feb file in base_configuration/
+#   2. Add an entry under designs with the matching feb_file value.
 #    The catalogue is auto-loaded at startup — no code changes needed.
 #
 # Config key convention: <size>_<urethra-model>   e.g. 14Fr_IR12

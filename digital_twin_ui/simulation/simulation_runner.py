@@ -71,6 +71,7 @@ class SimulationStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
+    CANCELLED = "CANCELLED"
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +395,10 @@ class SimulationRunner:
         """
         Spawn the solver process, stream stdout+stderr to log.txt,
         and return an updated RunResult.
+
+        A cancel watcher runs concurrently.  If the API writes a ``CANCEL``
+        file inside the run directory (via the shared runs/ volume), the watcher
+        terminates the FEBio subprocess and the run is marked CANCELLED.
         """
         proc = await asyncio.create_subprocess_exec(
             *result.command,
@@ -402,14 +407,45 @@ class SimulationRunner:
             cwd=str(result.run_dir),
         )
 
-        # Stream output line-by-line to log file
-        await self._stream_to_log(proc, result.log_file)
+        cancel_file = result.run_dir / "CANCEL"
 
-        exit_code = await proc.wait()
+        # Run output streaming and cancel-watcher concurrently.
+        # Whichever finishes first wins; the other is cancelled cleanly.
+        stream_task = asyncio.create_task(self._stream_to_log(proc, result.log_file))
+        cancel_task = asyncio.create_task(self._watch_cancel(proc, cancel_file))
+
+        done, pending = await asyncio.wait(
+            {stream_task, cancel_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # cancel_task returns True only if it killed the process
+        was_cancelled = (
+            cancel_task in done
+            and not cancel_task.cancelled()
+            and cancel_task.exception() is None
+            and cancel_task.result() is True
+        )
+
+        exit_code = proc.returncode
+        if exit_code is None:
+            exit_code = await proc.wait()
+
         completed_at = datetime.now(timezone.utc)
         duration = (completed_at - started_at).total_seconds()
 
-        if exit_code == 0:
+        if was_cancelled:
+            status = SimulationStatus.CANCELLED
+            error_message = "Cancelled by user request"
+            logger.info("Simulation cancelled", run_id=result.run_id)
+        elif exit_code == 0:
             status = SimulationStatus.COMPLETED
             error_message = None
             logger.info(
@@ -438,6 +474,56 @@ class SimulationRunner:
         )
         self._write_metadata(final)
         return final
+
+    async def _watch_cancel(
+        self,
+        proc: asyncio.subprocess.Process,
+        cancel_file: Path,
+        interval: float = 1.0,
+    ) -> bool:
+        """
+        Poll for a ``CANCEL`` sentinel file every *interval* seconds.
+
+        If the file appears, terminate (then kill) the subprocess and return
+        ``True``.  This coroutine never returns ``False`` — it loops until
+        either cancelled externally (process finished naturally) or the
+        sentinel file is found.
+
+        Args:
+            proc:        The running FEBio subprocess.
+            cancel_file: Path to the sentinel file written by the cancel API.
+            interval:    Polling interval in seconds (default 1.0).
+
+        Returns:
+            True if the process was cancelled.
+        """
+        while True:
+            if cancel_file.exists():
+                logger.info(
+                    "Cancel sentinel detected — terminating FEBio subprocess"
+                )
+                try:
+                    proc.terminate()
+                except (ProcessLookupError, AttributeError):
+                    pass
+                # Give the process 5 s to exit gracefully, then kill it
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    try:
+                        proc.kill()
+                    except (ProcessLookupError, AttributeError):
+                        pass
+                    try:
+                        await proc.wait()
+                    except Exception:
+                        pass
+                try:
+                    cancel_file.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    pass
+                return True
+            await asyncio.sleep(interval)
 
     @staticmethod
     async def _stream_to_log(
