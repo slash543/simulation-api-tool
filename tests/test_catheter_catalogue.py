@@ -288,6 +288,32 @@ class TestParseFebFilename:
         result = self._parse("tiemann_tip_14Fr_ir12")
         assert result == ("tiemann_tip", "14", "12")
 
+    # ------------------------------------------------------------------
+    # Uppercase / mixed-case naming (user's actual file convention)
+    # e.g. Ball_tip_14Fr_IR12.feb
+    # ------------------------------------------------------------------
+
+    def test_uppercase_design_key_normalised_to_lowercase(self):
+        # Ball_tip should become ball_tip
+        assert self._parse("Ball_tip_14Fr_IR12") == ("ball_tip", "14", "12")
+
+    def test_uppercase_ir_suffix(self):
+        # _IR12 (uppercase) must match same as _ir12
+        assert self._parse("ball_tip_14Fr_IR12") == ("ball_tip", "14", "12")
+
+    def test_uppercase_ir25(self):
+        assert self._parse("Ball_tip_14Fr_IR25") == ("ball_tip", "14", "25")
+
+    def test_uppercase_16fr_ir12(self):
+        assert self._parse("Ball_tip_16Fr_IR12") == ("ball_tip", "16", "12")
+
+    def test_nelaton_tip_uppercase(self):
+        assert self._parse("Nelaton_tip_14Fr_IR12") == ("nelaton_tip", "14", "12")
+
+    def test_fully_uppercase_stem(self):
+        # BALL_TIP_14FR_IR12 → ball_tip (all normalised to lowercase)
+        assert self._parse("BALL_TIP_14FR_IR12") == ("ball_tip", "14", "12")
+
 
 class TestDesignLabelFromKey:
     def _label(self, key: str) -> str:
@@ -387,6 +413,57 @@ class TestAutoDiscover:
             tmp_path, ["design_a_14Fr_ir12.feb", "sample_catheterization.feb"]
         )
         assert len(cat.designs) == 1
+
+    # ------------------------------------------------------------------
+    # Uppercase / mixed-case filenames (user's naming convention)
+    # e.g. Ball_tip_14Fr_IR12.feb
+    # ------------------------------------------------------------------
+
+    def test_uppercase_ir_suffix_auto_discovered(self, tmp_path):
+        """Ball_tip_14Fr_IR12.feb (uppercase IR) must be discovered."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["Ball_tip_14Fr_IR12.feb"]
+        )
+        names = {d.name for d in cat.designs}
+        assert "ball_tip" in names
+
+    def test_uppercase_file_config_key_correct(self, tmp_path):
+        """Config key derived from Ball_tip_14Fr_IR12 must be 14Fr_IR12."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["Ball_tip_14Fr_IR12.feb"]
+        )
+        d = cat.get_design("ball_tip")
+        keys = {c.key for c in d.configurations}
+        assert "14Fr_IR12" in keys
+
+    def test_uppercase_label_human_readable(self, tmp_path):
+        """Ball_tip auto-discovery must produce label 'Ball Tip'."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["Ball_tip_14Fr_IR12.feb"]
+        )
+        d = cat.get_design("ball_tip")
+        assert d.label == "Ball Tip"
+
+    def test_multiple_uppercase_files_same_design(self, tmp_path):
+        """Ball_tip_14Fr_IR12 and Ball_tip_14Fr_IR25 must be one design, two configs."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["Ball_tip_14Fr_IR12.feb", "Ball_tip_14Fr_IR25.feb"]
+        )
+        d = cat.get_design("ball_tip")
+        keys = {c.key for c in d.configurations}
+        assert "14Fr_IR12" in keys
+        assert "14Fr_IR25" in keys
+        assert len(d.configurations) == 2
+
+    def test_mixed_case_and_lowercase_same_design(self, tmp_path):
+        """Ball_tip_14Fr_IR12 and ball_tip_16Fr_ir12 must merge into one design."""
+        cat = self._make_catalogue_with_dir(
+            tmp_path, ["Ball_tip_14Fr_IR12.feb", "ball_tip_16Fr_ir12.feb"]
+        )
+        d = cat.get_design("ball_tip")
+        keys = {c.key for c in d.configurations}
+        assert "14Fr_IR12" in keys
+        assert "16Fr_IR12" in keys
 
     def test_no_base_config_dir(self, tmp_path):
         """If base_configuration/ doesn't exist, _auto_discover is a no-op."""

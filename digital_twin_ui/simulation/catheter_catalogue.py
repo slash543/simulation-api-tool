@@ -55,19 +55,27 @@ _FEB_SUBDIR = "base_configuration"
 # ---------------------------------------------------------------------------
 
 # Pattern: <design_key>_<size>Fr[optional extra words]_ir<ir_value>
-# Case-insensitive on the "Fr" / "ir" literals.
+# Fully case-insensitive — handles Ball_tip_14Fr_IR12 and ball_tip_14FR_ir12.
+# Design key is normalised to lowercase so Ball_tip and ball_tip are identical.
 # Examples handled:
-#   ball_tip_14FR_ir12         → ('ball_tip',          '14', '12')
-#   nelaton_tip_16Fr_ir25      → ('nelaton_tip',        '16', '25')
-#   vapro_introducer_14Fr_tip_ir12 → ('vapro_introducer', '14', '12')
-_FEB_RE = re.compile(r"^(.+?)_(\d+)[Ff][Rr].*?_ir(\d+)$")
+#   Ball_tip_14Fr_IR12             → ('ball_tip',          '14', '12')
+#   ball_tip_14FR_ir12             → ('ball_tip',          '14', '12')
+#   nelaton_tip_16Fr_ir25          → ('nelaton_tip',        '16', '25')
+#   vapro_introducer_14Fr_tip_ir12 → ('vapro_introducer',   '14', '12')
+_FEB_RE = re.compile(r"^(.+?)_(\d+)fr.*?_ir(\d+)$", re.IGNORECASE)
 
 
 def _parse_feb_filename(stem: str) -> tuple[str, str, str] | None:
-    """Parse a .feb filename stem to (design_key, size_fr, ir_value) or None."""
+    """Parse a .feb filename stem to (design_key, size_fr, ir_value) or None.
+
+    The design_key is always returned in lowercase so filenames with mixed
+    capitalisation (e.g. ``Ball_tip``) are treated identically to their
+    all-lowercase equivalents (``ball_tip``).
+    """
     m = _FEB_RE.match(stem)
     if m:
-        return m.group(1), m.group(2), m.group(3)
+        design_key = m.group(1).lower()   # normalise: Ball_tip → ball_tip
+        return design_key, m.group(2), m.group(3)
     return None
 
 
