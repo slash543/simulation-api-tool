@@ -31,9 +31,14 @@ _red()    { printf '\033[0;31m%s\033[0m\n' "$*"; }
 _bold()   { printf '\033[1m%s\033[0m\n'   "$*"; }
 
 # ---------------------------------------------------------------------------
-# Detect Python
+# Detect Python — prefer the project venv so httpx is already available
 # ---------------------------------------------------------------------------
 detect_python() {
+    # Project venv first (has all dependencies already installed)
+    if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+        echo "${REPO_ROOT}/.venv/bin/python"
+        return
+    fi
     for cmd in python3 python; do
         if command -v "$cmd" &>/dev/null; then
             echo "$cmd"
@@ -54,7 +59,12 @@ _green "Using Python: $($PYTHON --version)"
 # ---------------------------------------------------------------------------
 if ! "$PYTHON" -c "import httpx" 2>/dev/null; then
     _yellow "httpx not found — installing..."
-    "$PYTHON" -m pip install --user httpx
+    # On modern Debian/Ubuntu the system Python is externally-managed; try
+    # --user first, then fall back to --break-system-packages.
+    if ! "$PYTHON" -m pip install --user httpx 2>/dev/null; then
+        _yellow "  --user install failed (externally-managed env), retrying with --break-system-packages..."
+        "$PYTHON" -m pip install --break-system-packages httpx
+    fi
     _green "httpx installed."
 fi
 
