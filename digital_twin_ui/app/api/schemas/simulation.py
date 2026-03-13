@@ -334,6 +334,10 @@ class CatalogueListResponse(BaseModel):
     default_dwell_time_s: float = Field(
         ..., description="Default dwell time appended after each ramp, in seconds."
     )
+    warning: str | None = Field(
+        None,
+        description="Set when no .feb files are present in base_configuration/.",
+    )
 
 
 class CatheterSimRequest(BaseModel):

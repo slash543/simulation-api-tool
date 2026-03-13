@@ -208,15 +208,26 @@ class CatheterCatalogue:
 
         feb_path = self._project_root / _FEB_SUBDIR / cfg.feb_file
         if not feb_path.exists():
-            raise FileNotFoundError(
-                f"FEB file '{cfg.feb_file}' not found in {_FEB_SUBDIR}/. "
-                f"Expected: {feb_path}"
-            )
+            # Case-insensitive fallback for Linux (e.g. Ball_tip_14Fr_IR12.feb vs ball_tip_14FR_ir12.feb)
+            feb_dir = self._project_root / _FEB_SUBDIR
+            matches = [p for p in feb_dir.glob("*.feb") if p.name.lower() == cfg.feb_file.lower()]
+            if matches:
+                feb_path = matches[0]
+                logger.debug(
+                    "Case-insensitive match for '{wanted}' → '{found}'",
+                    wanted=cfg.feb_file,
+                    found=feb_path.name,
+                )
+            else:
+                raise FileNotFoundError(
+                    f"FEB file '{cfg.feb_file}' not found in {_FEB_SUBDIR}/. "
+                    f"Expected: {feb_path}"
+                )
 
         return TemplateConfig(
             name=f"{design}__{configuration}",
             label=f"{d.label} — {cfg.label}",
-            feb_file=cfg.feb_file,
+            feb_file=feb_path.name,  # use actual on-disk name (may differ in case from YAML)
             n_steps=params.n_steps,
             base_step_size=params.base_step_size,
             default_dwell_time_s=params.default_dwell_time_s,

@@ -592,20 +592,35 @@ async def list_catheter_designs() -> CatalogueListResponse:
     5. Call ``POST /simulations/run-catheter``.
     """
     from digital_twin_ui.simulation.catheter_catalogue import get_catalogue
+    from digital_twin_ui.app.core.config import get_settings
 
     cat = get_catalogue()
     params = cat.simulation_params
-    designs = [
-        CatalogueDesignEntry(
-            name=d.name,
-            label=d.label,
-            configurations=[
-                CatalogueConfigEntry(key=c.key, label=c.label, feb_file=c.feb_file)
-                for c in d.configurations
-            ],
+    feb_dir = get_settings().project_root / "base_configuration"
+
+    # Only include configurations whose .feb file is actually present on disk
+    # (case-insensitive match so Ball_tip_14Fr_IR12.feb matches ball_tip_14FR_ir12.feb)
+    on_disk = {p.name.lower() for p in feb_dir.glob("*.feb")} if feb_dir.is_dir() else set()
+
+    designs = []
+    for d in cat.designs:
+        available_configs = [
+            CatalogueConfigEntry(key=c.key, label=c.label, feb_file=c.feb_file)
+            for c in d.configurations
+            if c.feb_file.lower() in on_disk
+        ]
+        if available_configs:
+            designs.append(CatalogueDesignEntry(name=d.name, label=d.label, configurations=available_configs))
+
+    warning = (
+        None
+        if designs
+        else (
+            "No .feb files found in base_configuration/. "
+            "Copy your .feb geometry files there before running a simulation."
         )
-        for d in cat.designs
-    ]
+    )
+
     return CatalogueListResponse(
         designs=designs,
         n_steps=params.n_steps,
@@ -614,6 +629,7 @@ async def list_catheter_designs() -> CatalogueListResponse:
         speed_range_max=params.speed_max_mm_s,
         default_uniform_speed_mm_s=params.default_uniform_speed_mm_s,
         default_dwell_time_s=params.default_dwell_time_s,
+        warning=warning,
     )
 
 
@@ -733,20 +749,34 @@ async def refresh_catheter_designs() -> CatalogueListResponse:
         get_catalogue,
     )
 
+    from digital_twin_ui.app.core.config import get_settings
+
     reset_catalogue_singleton()
     cat = get_catalogue()
     params = cat.simulation_params
-    designs = [
-        CatalogueDesignEntry(
-            name=d.name,
-            label=d.label,
-            configurations=[
-                CatalogueConfigEntry(key=c.key, label=c.label, feb_file=c.feb_file)
-                for c in d.configurations
-            ],
+    feb_dir = get_settings().project_root / "base_configuration"
+
+    on_disk = {p.name.lower() for p in feb_dir.glob("*.feb")} if feb_dir.is_dir() else set()
+
+    designs = []
+    for d in cat.designs:
+        available_configs = [
+            CatalogueConfigEntry(key=c.key, label=c.label, feb_file=c.feb_file)
+            for c in d.configurations
+            if c.feb_file.lower() in on_disk
+        ]
+        if available_configs:
+            designs.append(CatalogueDesignEntry(name=d.name, label=d.label, configurations=available_configs))
+
+    warning = (
+        None
+        if designs
+        else (
+            "No .feb files found in base_configuration/. "
+            "Copy your .feb geometry files there before running a simulation."
         )
-        for d in cat.designs
-    ]
+    )
+
     return CatalogueListResponse(
         designs=designs,
         n_steps=params.n_steps,
@@ -755,6 +785,7 @@ async def refresh_catheter_designs() -> CatalogueListResponse:
         speed_range_max=params.speed_max_mm_s,
         default_uniform_speed_mm_s=params.default_uniform_speed_mm_s,
         default_dwell_time_s=params.default_dwell_time_s,
+        warning=warning,
     )
 
 

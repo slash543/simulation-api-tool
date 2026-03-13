@@ -40,6 +40,10 @@ Never assume which designs or configurations are available — new .feb files ma
 been added to base_configuration/ since the last conversation. Only use design names
 and configuration keys returned by list_catheter_designs().
 
+CRITICAL: After calling list_catheter_designs(), check the "warning" field in the response.
+If "warning" is not null, STOP and tell the user exactly what the warning says BEFORE listing
+designs or asking for simulation parameters. Do not proceed with a simulation if a warning is present.
+
 SPEED: check speed_range_min/max in the list_catheter_designs() response.
 For a uniform speed (e.g. "15 mm/s") repeat it once per step (n_steps from response).
 
@@ -175,8 +179,11 @@ def create_or_update_agent(
     )
 
     if resp.status_code in (200, 201):
-        agent = resp.json()
-        print(f"  Agent created: id={agent.get('id')}  name={agent.get('name')}")
+        try:
+            agent = resp.json()
+            print(f"  Agent created: id={agent.get('id')}  name={agent.get('name')}")
+        except Exception:
+            print(f"  Agent created (status {resp.status_code}; no JSON body returned).")
     elif resp.status_code == 409:
         print("  Agent already exists — use --update with --agent-id to overwrite.")
     else:

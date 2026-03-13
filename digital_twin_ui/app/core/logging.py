@@ -62,7 +62,7 @@ def _json_sink_serialiser(record: dict[str, Any]) -> str:  # type: ignore[type-a
             "type": exc.type.__name__ if exc.type else None,
             "value": str(exc.value) if exc.value else None,
         }
-    return json.dumps(payload)
+    return json.dumps(payload, default=str)
 
 
 def _json_sink(message: Any) -> None:  # type: ignore[type-arg]
