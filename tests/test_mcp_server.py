@@ -358,35 +358,21 @@ class TestMcpServerRegistration:
         from server import mcp  # noqa: PLC0415
 
         tool_names = {t.name for t in mcp._tool_manager.list_tools()}
-        expected = {
-            "health_check",
-            "run_simulation",
-            "submit_simulation",
-            "get_task_status",
-            "run_doe_campaign",
-            "get_doe_status",
-            "predict_pressure",
-            "predict_pressure_batch",
+        # Only 3 core simulation tools — designs are hardcoded in instructions.
+        assert tool_names == {
+            "run_catheter_simulation",
+            "list_simulation_jobs",
+            "cancel_simulation",
         }
-        assert expected.issubset(tool_names), (
-            f"Missing tools: {expected - tool_names}"
-        )
 
     def test_server_name(self) -> None:
         from server import mcp  # noqa: PLC0415
 
         assert mcp.name == "digital-twin-simulation"
 
-    def test_run_simulation_has_docstring(self) -> None:
+    def test_run_catheter_simulation_has_docstring(self) -> None:
         from server import mcp  # noqa: PLC0415
 
         tools = {t.name: t for t in mcp._tool_manager.list_tools()}
-        desc = tools["run_simulation"].description
+        desc = tools["run_catheter_simulation"].description
         assert desc is not None and len(desc) > 20
-
-    def test_run_doe_campaign_has_docstring(self) -> None:
-        from server import mcp  # noqa: PLC0415
-
-        tools = {t.name: t for t in mcp._tool_manager.list_tools()}
-        desc = tools["run_doe_campaign"].description
-        assert desc is not None and "Design of Experiments" in desc

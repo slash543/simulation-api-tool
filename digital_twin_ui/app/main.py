@@ -84,9 +84,30 @@ async def _pdf_poll_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
-    """Configure logging, auto-ingest PDFs on startup, and poll for new ones."""
+    """Configure logging, backfill job store, auto-ingest PDFs on startup."""
     configure_from_settings()
     logger.info("Digital Twin UI API starting up")
+
+    # Backfill SQLite job store from existing metadata.json files (one-time migration)
+    from digital_twin_ui.app.core.config import get_settings
+    from digital_twin_ui.simulation.job_store import get_job_store
+    try:
+        cfg = get_settings()
+        n = get_job_store().backfill_from_metadata(cfg.runs_dir_abs)
+        if n:
+            logger.info("Job store: backfilled {n} historical runs", n=n)
+    except Exception as exc:
+        logger.warning("Job store backfill failed (non-fatal): {e}", e=exc)
+
+    # Eager-load catheter catalogue at startup so it is ready for the first request.
+    # New .feb files added to base_configuration/ are detected only on Docker restart.
+    try:
+        from digital_twin_ui.simulation.catheter_catalogue import get_catalogue
+        cat = get_catalogue()
+        n_designs = len(cat.designs)
+        logger.info("Catheter catalogue loaded: {n} design(s) ready", n=n_designs)
+    except Exception as exc:
+        logger.warning("Catheter catalogue load failed (non-fatal): {e}", e=exc)
 
     # Start background PDF watcher (ingest immediately, then every 60 s)
     poll_task = asyncio.create_task(_pdf_poll_loop())

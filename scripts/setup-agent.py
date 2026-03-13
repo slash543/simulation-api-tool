@@ -12,7 +12,7 @@ Run this AFTER the full stack is up and you have registered a LibreChat account:
 The script:
   1. Logs in and obtains a JWT token
   2. Creates a "Simulation Assistant" agent pre-configured with:
-       - Endpoint: Simulation Agent (Ollama)
+       - Endpoint: Ollama (local)
        - Model:    qwen2.5:7b
        - System prompt: expert simulation assistant
        - All simulation MCP tools enabled (fetched from the server)
@@ -33,48 +33,25 @@ except ImportError:
 
 
 SYSTEM_PROMPT = """\
-You are an expert digital twin simulation assistant for catheter insertion biomechanics.
+You are a digital twin simulation assistant for catheter insertion biomechanics.
 
-You have access to tools that connect to a FEBio finite-element simulation pipeline
-and a trained machine-learning model.
+AVAILABLE DESIGNS (use exactly these keys):
+  ball_tip:          14Fr_IR12, 14Fr_IR25, 16Fr_IR12
+  nelaton_tip:       14Fr_IR12, 14Fr_IR25, 16Fr_IR12
+  vapro_introducer:  14Fr_IR12, 16Fr_IR12
 
-WHAT YOU CAN DO
-───────────────
-• Run individual FEBio simulations at a specified insertion speed
-• Execute Design-of-Experiments (DOE) campaigns to build synthetic datasets
-• Predict contact pressure instantly using the trained neural network
-• Poll the status of background jobs
+SPEED: 10–25 mm/s. Every design has 10 insertion steps.
+For a uniform speed (e.g. "15 mm/s") repeat it 10 times: [15,15,15,15,15,15,15,15,15,15]
 
-SIMULATION CONTEXT
-──────────────────
-• Key output: peak contact pressure (Pa) at the catheter–tissue interface
-• Typical insertion speeds: 2–10 mm/s
-• FEM simulations take 1–5 minutes; ML predictions are instant
+TO RUN A SIMULATION:
+1. Ask the user which design, configuration, and speed they want (if not already stated).
+2. Call run_catheter_simulation(design, configuration, speeds_mm_s).
+3. Tell the user: run_id, host_run_dir (results folder), host_xplt_path (open in FEBio Studio).
 
-WORKFLOW GUIDANCE
-─────────────────
-1. Single-speed query → use predict_pressure() for speed, or run_simulation() for FEM results.
-2. Build a synthetic database → run_doe_campaign(n_samples, speed_min, speed_max).
-   Poll get_doe_status() until complete.
-3. Compare FEM vs ML → run both and discuss the agreement.
+TO CHECK STATUS: call list_simulation_jobs().
+TO CANCEL: call list_simulation_jobs() to get run_id, ask user for task_id, then call cancel_simulation().
 
-Always present pressures with units (Pa or kPa) and interpret results clinically.
-
-RESEARCH DOCUMENT WORKFLOW
-──────────────────────────
-When a user asks ANY question about catheter biomechanics, FEBio, simulation methods,
-material properties, or any topic that might appear in the research PDFs:
-1. Call list_research_documents() to check if the store is indexed.
-2. If total_chunks is 0, call ingest_research_documents() immediately — do NOT ask
-   the user to upload files, the PDFs are already in research_documents/.
-3. Then call search_research_documents(query) with the user's question.
-4. Synthesise a clear answer from the returned chunks.
-5. Always cite the source PDF filename for each piece of information used.
-
-When a user asks "can you read PDFs?" or "list the PDFs":
-- Call list_research_documents().
-- If empty, auto-ingest first, then list again.
-- Present the filenames from the sources list.
+Keep responses concise. Do not make up paths or IDs.
 """
 
 
@@ -95,7 +72,7 @@ def login(client: httpx.Client, base_url: str, username: str, password: str) -> 
 
 
 def get_mcp_tools(client: httpx.Client, base_url: str, token: str) -> list[str]:
-    """Return the list of tool IDs from the simulation-tools MCP server."""
+    """Return the list of pluginKeys from the simulation-tools MCP server."""
     resp = client.get(
         f"{base_url}/api/mcp/tools",
         headers={"Authorization": f"Bearer {token}"},
@@ -103,33 +80,64 @@ def get_mcp_tools(client: httpx.Client, base_url: str, token: str) -> list[str]:
     if resp.status_code != 200:
         print(f"  WARNING: Could not fetch MCP tools ({resp.status_code}). Skipping tool assignment.")
         return []
-    tools = resp.json()
-    sim_tools = [t["id"] for t in tools if t.get("server") == "simulation-tools"]
-    print(f"  Found {len(sim_tools)} simulation MCP tool(s).")
-    return sim_tools
+    data = resp.json()
+    # Response format: {"servers": {"simulation-tools": {"tools": [{pluginKey, name, ...}]}}}
+    servers = data.get("servers", {}) if isinstance(data, dict) else {}
+    sim_server = servers.get("simulation-tools", {})
+    tools = sim_server.get("tools", [])
+    plugin_keys = [t["pluginKey"] for t in tools if t.get("pluginKey")]
+    print(f"  Found {len(plugin_keys)} simulation MCP tool(s).")
+    return plugin_keys
 
 
-def create_agent(
+def find_existing_agent(client: httpx.Client, base_url: str, token: str) -> str | None:
+    """Return the agent_id of the existing 'Simulation Assistant', or None.
+
+    LibreChat's GET /api/agents returns an SSE stream, not JSON — so we use
+    the user endpoint to derive the agent URL and try a direct PATCH approach.
+    Returns None if the agent is not found or the API is not accessible.
+    """
+    # LibreChat exposes individual agents at GET /api/agents/:id but there's
+    # no JSON list endpoint in most versions.  Return None to fall through to
+    # the POST path; the --update flag will use PATCH on a known ID instead.
+    return None
+
+
+def create_or_update_agent(
     client: httpx.Client,
     base_url: str,
     token: str,
     tool_ids: list[str],
+    force_update: bool = False,
+    agent_id: str | None = None,
 ) -> None:
     payload = {
         "name": "Simulation Assistant",
         "description": (
-            "Digital twin expert for catheter-insertion biomechanics. "
-            "Runs FEBio simulations, DOE campaigns, and ML predictions."
+            "Runs catheter insertion FEM simulations. "
+            "Tell it a design, size, and speed to start."
         ),
         "instructions": SYSTEM_PROMPT,
         "model": "qwen2.5:7b",
-        "endpoint": "Simulation Agent (Ollama)",
+        "endpoint": "Ollama (local)",
         "tools": tool_ids,
         "model_parameters": {
             "temperature": 0.2,
             "max_tokens": 4096,
         },
     }
+
+    if force_update and agent_id:
+        resp = client.patch(
+            f"{base_url}/api/agents/{agent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+        if resp.status_code in (200, 201):
+            print(f"  Agent updated: id={agent_id}")
+        else:
+            print(f"  WARNING: Update returned {resp.status_code}: {resp.text[:200]}")
+        return
 
     resp = client.post(
         f"{base_url}/api/agents",
@@ -141,7 +149,7 @@ def create_agent(
         agent = resp.json()
         print(f"  Agent created: id={agent.get('id')}  name={agent.get('name')}")
     elif resp.status_code == 409:
-        print("  Agent already exists — skipping creation.")
+        print("  Agent already exists — use --update with --agent-id to overwrite.")
     else:
         print(f"  WARNING: Agent creation returned {resp.status_code}: {resp.text[:200]}")
         print("  You can create the agent manually in the LibreChat UI → Agents.")
@@ -152,13 +160,15 @@ def main() -> None:
     parser.add_argument("--url", default="http://localhost:3080", help="LibreChat base URL")
     parser.add_argument("--username", required=True, help="LibreChat account email")
     parser.add_argument("--password", required=True, help="LibreChat account password")
+    parser.add_argument("--update", action="store_true", help="Update existing agent's system prompt instead of creating a new one")
+    parser.add_argument("--agent-id", default=None, help="Agent ID to update (required with --update, e.g. agent_t_i9u644tIs83cXDSTTph)")
     args = parser.parse_args()
 
     print(f"\nConnecting to LibreChat at {args.url} …")
     with httpx.Client(timeout=30) as client:
         token = login(client, args.url, args.username, args.password)
         tool_ids = get_mcp_tools(client, args.url, token)
-        create_agent(client, args.url, token, tool_ids)
+        create_or_update_agent(client, args.url, token, tool_ids, force_update=args.update, agent_id=args.agent_id)
 
     print("\nDone!  Open LibreChat → Agents to find 'Simulation Assistant'.")
     print("Or create it manually in the UI and enable the simulation-tools MCP server.\n")
