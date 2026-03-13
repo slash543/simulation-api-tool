@@ -29,6 +29,7 @@ x-app-env: &app-env
   DTUI__MLFLOW__TRACKING_URI: "http://mlflow:5000"
 
 x-app-volumes: &app-volumes
+  - ./scripts/start-worker.sh:/app/scripts/start-worker.sh:ro
   - ${RUNS_HOST_PATH:-./runs}:/app/runs
   - logs_data:/app/logs
   - datasets_data:/app/data
@@ -134,6 +135,16 @@ services:
       <<: *app-env
       # Solver executable — override if your binary has a different name
       DTUI__SIMULATION__SIMULATOR_EXECUTABLE: "${FEBIO_EXECUTABLE:-febio4}"
+      # Fraction of total cores allocated to FEBio simulations (default 0.5).
+      # The remaining cores are left for Ollama, LibreChat, API, and other services.
+      # See scripts/start-worker.sh for the full allocation logic.
+      SIMULATION_CPU_FRACTION: "${SIMULATION_CPU_FRACTION:-0.5}"
+      # Override auto-computed values if needed (leave unset for auto):
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-auto}"
+      OMP_NUM_THREADS: "${OMP_NUM_THREADS:-auto}"
+    # start-worker.sh auto-detects nproc at runtime and derives concurrency +
+    # OMP_NUM_THREADS — no hardcoded core counts anywhere.
+    command: ["/bin/bash", "/app/scripts/start-worker.sh"]
     # To also bind-mount the FEBio binary, replace `volumes: *app-volumes` with
     # an explicit list that adds the binary mount at the end.
     volumes: *app-volumes
@@ -145,7 +156,9 @@ services:
       replicas: 1
       resources:
         limits:
-          memory: 8G
+          # Memory scales with parallel jobs (~6–8 GB per FEBio process).
+          # Default 16G covers up to ~2 parallel jobs; increase if running more.
+          memory: ${WORKER_MEMORY_LIMIT:-16G}
 
   # ---------------------------------------------------------------------------
   # RAG ingest-init — indexes research_documents/ on every stack startup

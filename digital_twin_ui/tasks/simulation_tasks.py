@@ -74,6 +74,13 @@ class _BaseTask(Task):
             task_id,
             exc,
         )
+        run_id = kwargs.get("run_id")
+        if run_id:
+            try:
+                from digital_twin_ui.simulation.job_store import get_job_store
+                get_job_store().update_status(run_id, "FAILED", error_message=str(exc))
+            except Exception:
+                pass
         super().on_failure(exc, task_id, args, kwargs, einfo)
 
     def on_retry(self, exc, task_id, args, kwargs, einfo):
@@ -572,4 +579,16 @@ def run_catheter_simulation_task(
         result.status.value,
         result.duration_s or 0.0,
     )
+
+    try:
+        from digital_twin_ui.simulation.job_store import get_job_store
+        db_status = (
+            "CANCELLED" if result.status.value == "CANCELLED"
+            else "COMPLETED" if result.status.value == "COMPLETED"
+            else "FAILED"
+        )
+        get_job_store().update_status(result.run_id, db_status)
+    except Exception as exc:
+        logger.warning("job_store update failed: %s", exc)
+
     return result.as_dict()

@@ -52,13 +52,24 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      # Limit Ollama to a fraction of cores so it doesn't starve FEBio workers.
+      # Default: leave unset — Ollama auto-detects.  Set in .env.librechat:
+      #   LLM_CPU_FRACTION=0.3  →  on 64 cores, Ollama gets ~19 threads
+      # Or pin directly: OLLAMA_NUM_THREAD=16
+      OLLAMA_NUM_THREAD: "${OLLAMA_NUM_THREAD:-}"
     healthcheck:
       test: ["CMD-SHELL", "ollama list || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
-    # ── GPU support (NVIDIA) — uncomment to enable ───────────────────────────
+    # ── GPU support (NVIDIA) ─────────────────────────────────────────────────
+    # Requires nvidia-container-toolkit on the host:
+    #   sudo apt-get install -y nvidia-container-toolkit
+    #   sudo nvidia-ctk runtime configure --runtime=docker
+    #   sudo systemctl restart docker
+    # Then uncomment the deploy block below:
     # deploy:
     #   resources:
     #     reservations:
@@ -83,8 +94,9 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        echo "Pulling qwen2.5:7b (this may take several minutes on first run)..."
-        ollama pull qwen2.5:7b
+        MODEL="${OLLAMA_MODEL:-qwen2.5:7b}"
+        echo "Pulling ${MODEL} (this may take several minutes on first run)..."
+        ollama pull "${MODEL}"
         echo "Model pull complete."
     restart: "no"
 
@@ -101,7 +113,6 @@ services:
       - "8001:8001"
     environment:
       SIMULATION_API_URL: "http://api:8000/api/v1"
-      HTTP_TIMEOUT: "360"
       # FastMCP reads host/port from these specific env var names
       FASTMCP_HOST: "0.0.0.0"
       FASTMCP_PORT: "8001"

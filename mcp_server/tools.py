@@ -14,7 +14,11 @@ from typing import Any
 import httpx
 
 API_BASE: str = os.getenv("SIMULATION_API_URL", "http://api:8000/api/v1")
-HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "300"))
+HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "30"))
+# Fast timeout for read-only listing calls — these should return in <1 s when
+# the API is healthy.  A short deadline means the LLM gets an error message
+# immediately instead of hanging for minutes.
+HTTP_FAST_TIMEOUT: float = float(os.getenv("HTTP_FAST_TIMEOUT", "15"))
 
 # Host-side path to the runs directory (Docker volume mount point on the host).
 # Used to translate container-internal /app/runs/... paths to host paths so
@@ -42,6 +46,11 @@ def _client() -> httpx.Client:
     return httpx.Client(base_url=API_BASE, timeout=HTTP_TIMEOUT)
 
 
+def _fast_client() -> httpx.Client:
+    """Short-timeout client for read-only listing calls (health, designs, jobs)."""
+    return httpx.Client(base_url=API_BASE, timeout=HTTP_FAST_TIMEOUT)
+
+
 def _ok(data: Any) -> str:
     """Serialise a response payload to a JSON string."""
     return json.dumps(data, default=str)
@@ -58,7 +67,7 @@ def _err(msg: str) -> str:
 def tool_health_check() -> str:
     """Return the simulation API health status."""
     try:
-        with _client() as c:
+        with _fast_client() as c:
             r = c.get("/health")
             r.raise_for_status()
             return _ok(r.json())
@@ -184,7 +193,7 @@ def tool_list_templates() -> str:
     tool_run_simulation().
     """
     try:
-        with _client() as c:
+        with _fast_client() as c:
             r = c.get("/templates")
             r.raise_for_status()
             return _ok(r.json())
@@ -259,7 +268,7 @@ def tool_list_catheter_designs() -> str:
     Present the three designs by label, then show configurations for the chosen design.
     """
     try:
-        with _client() as c:
+        with _fast_client() as c:
             r = c.get("/catheter-designs")
             r.raise_for_status()
             return _ok(r.json())
@@ -369,7 +378,7 @@ def tool_list_research_documents() -> str:
     Call this to check what has been ingested before searching.
     """
     try:
-        with _client() as c:
+        with _fast_client() as c:
             r = c.get("/documents/list")
             r.raise_for_status()
             return _ok(r.json())
@@ -489,8 +498,8 @@ def tool_list_simulation_jobs() -> str:
     mapping applied by tool_run_catheter_simulation().
     """
     try:
-        with _client() as c:
-            r = c.get("/simulations")
+        with _fast_client() as c:
+            r = c.get("/simulations", params={"limit": 20})
             r.raise_for_status()
             data = r.json()
 

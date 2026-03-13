@@ -362,6 +362,9 @@ async def cancel_simulation(body: CancelRequest) -> CancelResponse:
         app = _get_celery_app()
         app.control.revoke(body.task_id, terminate=True, signal="SIGTERM")
 
+    from digital_twin_ui.simulation.job_store import get_job_store
+    get_job_store().update_status(body.run_id, "CANCELLED")
+
     return CancelResponse(
         run_id=body.run_id,
         task_id=body.task_id,
@@ -685,6 +688,18 @@ async def submit_catheter_simulation(body: CatheterSimRequest) -> TaskResponse:
         run_id=run_id,
     )
 
+    from digital_twin_ui.simulation.job_store import get_job_store
+    get_job_store().insert(
+        run_id=run_id,
+        task_id=task.id,
+        design=body.design,
+        configuration=body.configuration,
+        speeds_mm_s=body.speeds_mm_s,
+        dwell_time_s=body.dwell_time_s,
+        run_dir=str(run_dir),
+        xplt_path=str(xplt_path),
+    )
+
     return TaskResponse(
         task_id=task.id,
         status="PENDING",
@@ -752,68 +767,66 @@ async def refresh_catheter_designs() -> CatalogueListResponse:
     response_model=SimulationJobListResponse,
     tags=["simulation"],
 )
-async def list_simulation_jobs() -> SimulationJobListResponse:
+async def list_simulation_jobs(limit: int = 20) -> SimulationJobListResponse:
     """
-    Return all simulation run directories found in ``runs/``, newest first.
+    Return the most recent simulation jobs, newest first.
 
-    For each run the response includes:
+    Queries the SQLite job store (``data/jobs.db``) — O(log n) regardless of
+    how many runs exist in ``runs/``.  Only the returned rows are stat'd on
+    disk to verify ``xplt_exists``.
+
+    For each job the response includes:
 
     * ``run_id``      — folder name (used in cancel requests)
     * ``run_dir``     — absolute path on the container (for internal use)
     * ``xplt_path``   — where the ``.xplt`` results file will/does live
     * ``xplt_exists`` — ``true`` once the solver has finished writing
     * ``log_path``    — live solver log (tail this to watch progress)
-    * ``status``      — ``completed`` | ``cancelled`` | ``running`` | ``unknown``
-    * ``created_at``  — ISO-8601 folder creation timestamp
+    * ``status``      — ``PENDING`` | ``COMPLETED`` | ``CANCELLED`` | ``FAILED`` | ``UNKNOWN``
+    * ``created_at``  — ISO-8601 timestamp when the job was submitted
 
-    Status is inferred from sentinel files:
-
-    * ``CANCEL`` file present → ``"cancelled"``
-    * ``input.xplt`` present  → ``"completed"``
-    * Otherwise               → ``"running"`` (or ``"unknown"`` if no log yet)
+    Args:
+        limit: Maximum number of jobs to return (default 20, max 100).
     """
-    from datetime import datetime, timezone
+    from digital_twin_ui.simulation.job_store import get_job_store
 
-    cfg = get_settings()
-    runs_dir = cfg.runs_dir_abs
+    rows = get_job_store().list_recent(limit=limit)
 
     jobs: list[SimulationJobInfo] = []
-    if runs_dir.exists():
-        for run_path in sorted(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-            if not run_path.is_dir():
-                continue
-            xplt = run_path / "input.xplt"
-            log = run_path / "log.txt"
-            cancel = run_path / "CANCEL"
-
-            if cancel.exists():
-                inferred = "cancelled"
-            elif xplt.exists():
-                inferred = "completed"
-            elif log.exists():
-                inferred = "running"
-            else:
-                inferred = "unknown"
-
-            try:
-                mtime = run_path.stat().st_mtime
-                created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-            except OSError:
-                created_at = None
-
-            jobs.append(
-                SimulationJobInfo(
-                    run_id=run_path.name,
-                    run_dir=str(run_path),
-                    xplt_path=str(xplt),
-                    xplt_exists=xplt.exists(),
-                    log_path=str(log),
-                    status=inferred,
-                    created_at=created_at,
-                )
+    for row in rows:
+        xplt_path = row["xplt_path"] or ""
+        run_dir = row["run_dir"] or ""
+        xplt_exists = Path(xplt_path).exists() if xplt_path else False
+        log_path = str(Path(run_dir) / "log.txt") if run_dir else ""
+        jobs.append(
+            SimulationJobInfo(
+                run_id=row["run_id"],
+                run_dir=run_dir,
+                xplt_path=xplt_path,
+                xplt_exists=xplt_exists,
+                log_path=log_path,
+                status=row["status"].lower(),
+                created_at=row["created_at"],
             )
+        )
 
     return SimulationJobListResponse(jobs=jobs, total=len(jobs))
+
+
+@router.post(
+    "/simulations/cleanup",
+    tags=["simulation"],
+)
+async def cleanup_stale_jobs() -> dict:
+    """
+    Remove job store records whose run directory no longer exists on disk.
+
+    Safe to call after manually deleting folders from ``runs/``.
+    Returns the count of removed records.
+    """
+    from digital_twin_ui.simulation.job_store import get_job_store
+    removed = get_job_store().purge_missing()
+    return {"removed": removed, "message": f"Removed {removed} stale record(s) from job store."}
 
 
 @router.post(
