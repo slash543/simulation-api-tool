@@ -49,6 +49,7 @@ from typing import Any
 from lxml import etree
 
 from digital_twin_ui.app.core.logging import get_logger
+from digital_twin_ui.simulation.feb_reader import validate_feb_steps
 from digital_twin_ui.simulation.template_registry import TemplateConfig
 
 logger = get_logger(__name__)
@@ -159,6 +160,10 @@ class MultiStepConfigurator:
             raise FileNotFoundError(
                 f"Template .feb file not found: {feb_path}"
             )
+
+        # Validate that the file has exactly n_steps steps before modifying it.
+        # Each <step> in the FEB XML is one analysis step (also called an event).
+        validate_feb_steps(feb_path, required_steps=n)
 
         logger.info(
             "MultiStepConfigurator: configuring '{name}' with {n} speeds",

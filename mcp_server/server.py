@@ -26,10 +26,12 @@ from tools import (
     tool_ingest_research_documents,
     tool_list_catheter_designs,
     tool_list_research_documents,
+    tool_list_simulation_jobs,
     tool_list_templates,
     tool_predict_pressure,
     tool_predict_pressure_batch,
     tool_preview_doe_speeds,
+    tool_refresh_catalogue,
     tool_run_catheter_simulation,
     tool_run_doe_campaign,
     tool_run_simulation,
@@ -46,15 +48,16 @@ mcp = FastMCP(
     instructions=(
         "You are an expert digital twin simulation assistant for catheter insertion "
         "biomechanics. You have tools to:\n"
-        "  • list available catheter designs (tip geometries)\n"
+        "  • list and refresh available catheter designs (tip geometries)\n"
         "  • run FEBio FEM simulations for a chosen catheter design with per-step speeds\n"
+        "  • list, inspect, and cancel simulation jobs\n"
         "  • run DOE campaigns to build a synthetic simulation database\n"
         "  • predict contact pressure instantly using the trained ML model\n"
         "  • poll async task results\n\n"
         "WORKFLOW WHEN USER ASKS TO RUN A SIMULATION:\n"
-        "  1. Call list_catheter_designs() → this returns ALL available designs detected\n"
-        "     from the base_configuration/ folder (new .feb files are picked up automatically\n"
-        "     when the stack restarts — no YAML or code changes needed).\n"
+        "  1. Call list_catheter_designs() → returns ALL designs auto-detected from\n"
+        "     base_configuration/ at startup.  If the user says they just added a new\n"
+        "     .feb file, call refresh_catalogue() FIRST to pick it up without restart.\n"
         "     Present every tip design by label.\n"
         "  2. Ask: 'Which catheter tip design?' (e.g. Ball Tip / Nelaton Tip / Vapro Introducer)\n"
         "  3. Show configurations for the chosen design → ask: 'Which size / urethra model?'\n"
@@ -69,26 +72,35 @@ mcp = FastMCP(
         "AFTER run_catheter_simulation() RETURNS:\n"
         "  Always tell the user ALL of:\n"
         "  • The simulation is running in the background.\n"
-        "  • host_run_dir — folder on their machine where files will appear.\n"
-        "  • host_xplt_path — the .xplt file to open in FEBio Studio (File > Open).\n"
+        "  • host_run_dir — folder on their machine where result files will appear.\n"
+        "  • host_xplt_path — the .xplt to open in FEBio Studio once the run finishes.\n"
         "  • log.txt inside that folder shows live solver progress.\n"
-        "  • They can cancel the simulation at any time by asking you to stop/cancel/kill it.\n\n"
+        "  • They can cancel at any time — just ask.\n\n"
+        "LISTING SIMULATION JOBS:\n"
+        "  If the user asks 'what simulations are running?', 'show my jobs', or wants\n"
+        "  to find a result file:\n"
+        "  1. Call list_simulation_jobs() → returns all run directories, newest first.\n"
+        "  2. For each job, show: run_id, status, host_run_dir, host_xplt_path.\n"
+        "  3. For completed jobs, host_xplt_path is the file to open in FEBio Studio.\n\n"
         "CANCELLING A SIMULATION:\n"
-        "  If the user asks to stop, cancel, abort, or kill a running simulation:\n"
-        "  1. You need the task_id and run_id from the original submission response.\n"
-        "     If you don't have them, ask the user.\n"
+        "  If the user asks to stop, cancel, abort, or kill a simulation:\n"
+        "  1. If you don't have the task_id and run_id, call list_simulation_jobs()\n"
+        "     to find the running job, then ask the user to confirm which one.\n"
+        "     NOTE: list_simulation_jobs() does NOT return task_id — if you need it,\n"
+        "     ask the user (it was shown when the job was submitted).\n"
         "  2. Call cancel_simulation(task_id, run_id).\n"
         "  3. Tell the user the simulation will stop within ~1 second.\n\n"
+        "ADDING NEW .FEB FILES (after git clone on a new VM):\n"
+        "  New .feb files placed in base_configuration/ are picked up automatically.\n"
+        "  If the stack is already running: call refresh_catalogue() once to rescan\n"
+        "  without restarting.  Then call list_catheter_designs() to confirm.\n\n"
         "Use predict_pressure() for instant ML estimates (requires prior training). "
         "For building a database, prefer run_doe_campaign() with 10–50 samples.\n\n"
         "RESEARCH DOCUMENT WORKFLOW:\n"
-        "  When a user asks a question about catheter biomechanics, FEBio, simulation\n"
-        "  methods, or any topic that might be covered in the research documents:\n"
+        "  When a user asks about catheter biomechanics, FEBio, or simulation methods:\n"
         "  1. Call search_research_documents(query) to find relevant excerpts.\n"
-        "  2. If the result says the store is empty, call ingest_research_documents()\n"
-        "     first, then retry the search.\n"
-        "  3. Synthesise a clear answer from the returned chunks.\n"
-        "  4. Always cite the source PDF filename for each piece of information."
+        "  2. If the store is empty, call ingest_research_documents() first.\n"
+        "  3. Synthesise a clear answer and cite the source PDF filenames."
     ),
 )
 
@@ -329,6 +341,55 @@ def list_catheter_designs() -> str:
         speed_range_min/max, default_uniform_speed_mm_s, default_dwell_time_s).
     """
     return tool_list_catheter_designs()
+
+
+@mcp.tool()
+def refresh_catalogue() -> str:
+    """
+    Rescan base_configuration/ for new .feb files and refresh the design catalogue.
+
+    Call this after the user has dropped a new .feb file into base_configuration/
+    on the host (e.g. after 'git clone' on a new VM and adding files) WITHOUT
+    restarting the containers.  Returns the same JSON as list_catheter_designs()
+    but with the freshly discovered designs included.
+
+    Typical usage:
+      1. User: 'I added a new .feb file, can you see it?'
+      2. Call refresh_catalogue() → confirm the new design appears in the list.
+      3. Proceed with the normal simulation workflow.
+
+    Returns:
+        JSON with designs list + shared simulation params (same as list_catheter_designs).
+    """
+    return tool_refresh_catalogue()
+
+
+@mcp.tool()
+def list_simulation_jobs() -> str:
+    """
+    Return all simulation runs found in the runs/ directory, newest first.
+
+    Use this when the user asks:
+      • 'What simulations are running?'
+      • 'Show me my recent jobs'
+      • 'Where is my result file?'
+      • 'I want to cancel a simulation but I don't have the run_id'
+
+    For each job the response includes:
+      - run_id:         folder name (use in cancel_simulation)
+      - status:         'completed' | 'cancelled' | 'running' | 'unknown'
+      - host_run_dir:   path on the HOST machine to the run folder
+      - host_xplt_path: path on the HOST machine to the .xplt result file
+      - xplt_exists:    true when the solver has finished writing the file
+      - log_path:       path to the live solver log inside the container
+
+    Note: task_id is NOT returned here — it was shown at job submission time.
+    If needed for cancel_simulation(), ask the user to provide it.
+
+    Returns:
+        JSON with jobs list (newest first) and total count.
+    """
+    return tool_list_simulation_jobs()
 
 
 @mcp.tool()

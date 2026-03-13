@@ -451,6 +451,61 @@ def tool_search_research_documents(query: str, n_results: int = 5) -> str:
         return _err(f"Request error: {exc}")
 
 
+def tool_refresh_catalogue() -> str:
+    """
+    Rescan base_configuration/ for new .feb files and refresh the catalogue.
+
+    Call this after the user has added new .feb files to the base_configuration/
+    folder (e.g. on a freshly cloned VM) WITHOUT restarting the containers.
+
+    Returns the same JSON as list_catheter_designs() but with the updated list.
+    """
+    try:
+        with _client() as c:
+            r = c.post("/catheter-designs/refresh")
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPError as exc:
+        return _err(f"Refresh error: {exc}")
+
+
+def tool_list_simulation_jobs() -> str:
+    """
+    Return all simulation runs found in the runs/ directory, newest first.
+
+    For each run the response includes:
+      - run_id:      folder name (needed for cancel_simulation)
+      - run_dir:     path to the run folder
+      - xplt_path:   where the .xplt results file will appear
+      - xplt_exists: true once the solver has finished writing
+      - log_path:    live solver log
+      - status:      'completed' | 'cancelled' | 'running' | 'unknown'
+      - created_at:  ISO-8601 creation timestamp
+
+    Use this to list running jobs so the user can pick one to cancel, or to
+    find the xplt_path for a completed simulation.
+
+    Translate container paths to host paths using the same RUNS_HOST_PATH
+    mapping applied by tool_run_catheter_simulation().
+    """
+    try:
+        with _client() as c:
+            r = c.get("/simulations")
+            r.raise_for_status()
+            data = r.json()
+
+        # Translate container run_dir and xplt_path to host-accessible paths
+        for job in data.get("jobs", []):
+            if job.get("run_dir"):
+                job["host_run_dir"] = _to_host_path(job["run_dir"])
+            if job.get("xplt_path"):
+                job["host_xplt_path"] = _to_host_path(job["xplt_path"])
+
+        return _ok(data)
+    except httpx.HTTPError as exc:
+        return _err(f"List jobs error: {exc}")
+
+
 def tool_preview_doe_speeds(
     n_samples: int = 10,
     speed_min: float = 10.0,

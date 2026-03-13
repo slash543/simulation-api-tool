@@ -67,10 +67,10 @@ designs:
     configurations:
       14Fr_IR12:
         label: "14Fr catheter — IR12 urethra model"
-        feb_file: "vapro_introducer_14Fr_tip_ir12.feb"
+        feb_file: "vapro_introducer_tip_14Fr_ir12.feb"
       16Fr_IR12:
         label: "16Fr catheter — IR12 urethra model"
-        feb_file: "vapro_introducer_16Fr_tip_ir12.feb"
+        feb_file: "vapro_introducer_tip_16Fr_ir12.feb"
 
 
 # =============================================================================

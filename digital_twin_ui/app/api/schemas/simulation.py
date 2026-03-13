@@ -377,6 +377,31 @@ class CatheterSimRequest(BaseModel):
     )
 
 
+class SimulationJobInfo(BaseModel):
+    """Summary of one simulation run directory on disk."""
+
+    run_id: str = Field(..., description="Run identifier (folder name).")
+    run_dir: str = Field(..., description="Absolute path to the run folder.")
+    xplt_path: str = Field(..., description="Expected path of the .xplt results file.")
+    xplt_exists: bool = Field(..., description="True if the .xplt file has been written.")
+    log_path: str = Field(..., description="Path to the solver log file.")
+    status: str = Field(
+        ...,
+        description="Inferred status: 'completed', 'cancelled', 'running', or 'unknown'.",
+    )
+    created_at: Optional[str] = Field(
+        None,
+        description="ISO-8601 timestamp when the run directory was created.",
+    )
+
+
+class SimulationJobListResponse(BaseModel):
+    """All simulation runs found in the runs/ directory."""
+
+    jobs: list[SimulationJobInfo]
+    total: int = Field(..., description="Total number of runs found.")
+
+
 class DOESpeedPreviewRequest(BaseModel):
     """Request body for previewing DOE speed samples without running simulations."""
 

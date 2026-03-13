@@ -42,6 +42,8 @@ from digital_twin_ui.app.api.schemas.simulation import (
     MLPredictRequest,
     MLPredictResponse,
     PressureResultResponse,
+    SimulationJobInfo,
+    SimulationJobListResponse,
     SimulationRequest,
     SimulationResultResponse,
     TaskResponse,
@@ -694,6 +696,124 @@ async def submit_catheter_simulation(body: CatheterSimRequest) -> TaskResponse:
         run_dir=str(run_dir),
         xplt_path=str(xplt_path),
     )
+
+
+@router.post(
+    "/catheter-designs/refresh",
+    response_model=CatalogueListResponse,
+    tags=["catheter-designs"],
+)
+async def refresh_catheter_designs() -> CatalogueListResponse:
+    """
+    Rescan ``base_configuration/`` for new or removed ``.feb`` files and return
+    the updated catalogue.
+
+    Call this after dropping a new ``.feb`` file into the ``base_configuration/``
+    folder on the host (e.g. after ``git clone`` on a new VM and adding files).
+    The catalogue singleton is reset so the next ``GET /catheter-designs`` also
+    returns the refreshed list without a container restart.
+    """
+    from digital_twin_ui.simulation.catheter_catalogue import (
+        reset_catalogue_singleton,
+        get_catalogue,
+    )
+
+    reset_catalogue_singleton()
+    cat = get_catalogue()
+    params = cat.simulation_params
+    designs = [
+        CatalogueDesignEntry(
+            name=d.name,
+            label=d.label,
+            configurations=[
+                CatalogueConfigEntry(key=c.key, label=c.label, feb_file=c.feb_file)
+                for c in d.configurations
+            ],
+        )
+        for d in cat.designs
+    ]
+    return CatalogueListResponse(
+        designs=designs,
+        n_steps=params.n_steps,
+        displacements_mm=params.displacements_mm,
+        speed_range_min=params.speed_min_mm_s,
+        speed_range_max=params.speed_max_mm_s,
+        default_uniform_speed_mm_s=params.default_uniform_speed_mm_s,
+        default_dwell_time_s=params.default_dwell_time_s,
+    )
+
+
+# ---------------------------------------------------------------------------
+# List recent simulation jobs
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/simulations",
+    response_model=SimulationJobListResponse,
+    tags=["simulation"],
+)
+async def list_simulation_jobs() -> SimulationJobListResponse:
+    """
+    Return all simulation run directories found in ``runs/``, newest first.
+
+    For each run the response includes:
+
+    * ``run_id``      — folder name (used in cancel requests)
+    * ``run_dir``     — absolute path on the container (for internal use)
+    * ``xplt_path``   — where the ``.xplt`` results file will/does live
+    * ``xplt_exists`` — ``true`` once the solver has finished writing
+    * ``log_path``    — live solver log (tail this to watch progress)
+    * ``status``      — ``completed`` | ``cancelled`` | ``running`` | ``unknown``
+    * ``created_at``  — ISO-8601 folder creation timestamp
+
+    Status is inferred from sentinel files:
+
+    * ``CANCEL`` file present → ``"cancelled"``
+    * ``input.xplt`` present  → ``"completed"``
+    * Otherwise               → ``"running"`` (or ``"unknown"`` if no log yet)
+    """
+    from datetime import datetime, timezone
+
+    cfg = get_settings()
+    runs_dir = cfg.runs_dir_abs
+
+    jobs: list[SimulationJobInfo] = []
+    if runs_dir.exists():
+        for run_path in sorted(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not run_path.is_dir():
+                continue
+            xplt = run_path / "input.xplt"
+            log = run_path / "log.txt"
+            cancel = run_path / "CANCEL"
+
+            if cancel.exists():
+                inferred = "cancelled"
+            elif xplt.exists():
+                inferred = "completed"
+            elif log.exists():
+                inferred = "running"
+            else:
+                inferred = "unknown"
+
+            try:
+                mtime = run_path.stat().st_mtime
+                created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+            except OSError:
+                created_at = None
+
+            jobs.append(
+                SimulationJobInfo(
+                    run_id=run_path.name,
+                    run_dir=str(run_path),
+                    xplt_path=str(xplt),
+                    xplt_exists=xplt.exists(),
+                    log_path=str(log),
+                    status=inferred,
+                    created_at=created_at,
+                )
+            )
+
+    return SimulationJobListResponse(jobs=jobs, total=len(jobs))
 
 
 @router.post(
