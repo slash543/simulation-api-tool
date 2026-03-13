@@ -1,68 +1,165 @@
 # Digital Twin UI
 
-A platform that automates catheter insertion FEM simulations, runs Design of Experiments campaigns, builds an ML dataset, and serves predictions through a REST API — with an AI agent interface via LibreChat.
+A platform for running catheter insertion FEM simulations (FEBio) through a conversational AI interface. Drop in a FEB file, chat with the agent, submit jobs, monitor progress, and retrieve results — no scripting required.
 
 ---
 
-## Quick Start
+## What it does
 
-```bash
-git clone https://github.com/slash543/simulation-api-tool.git
-cd simulation-api-tool
-chmod +x setup.sh && ./setup.sh
-docker compose -f docker-compose.librechat.yml up --build -d
-```
-
-Open **http://localhost:3080**, register an account, and start chatting with the Simulation Assistant.
-
-> **First run:** Ollama downloads `qwen2.5:7b` (~4.7 GB). Watch progress with:
-> ```bash
-> docker compose -f docker-compose.librechat.yml logs -f ollama-init
-> # Wait for: "Model pull complete."
-> ```
+- **AI chat interface** (LibreChat + Ollama) — submit simulations, list jobs, cancel runs, search research papers, all through natural language
+- **FEBio simulation runner** — modifies load-curve timings and step counts from chat parameters, runs FEBio in the background via a task queue
+- **Dynamic file discovery** — place `.feb` files in `base_configuration/` and they appear in the agent's menu automatically
+- **Job management** — list running/completed/cancelled jobs, get result file paths, kill long-running simulations
+- **Research document search** — drop PDFs in `research_documents/`, the agent indexes and searches them with source citations
+- **REST API** — every capability is also exposed as a documented FastAPI endpoint
 
 ---
 
 ## Prerequisites
 
-| Requirement | Notes |
+| Requirement | Check |
 |---|---|
-| Docker + Docker Compose v2 | `docker compose version` must work |
-| FEBio 4 | Install from [febio.org/downloads](https://febio.org/downloads/) — `setup.sh` auto-detects it |
-| `openssl` | Usually pre-installed; used by `setup.sh` to generate secrets |
+| Docker + Docker Compose v2 | `docker compose version` |
+| FEBio 4 | Download from [febio.org/downloads](https://febio.org/downloads/) and install |
+| `openssl` | `openssl version` (pre-installed on most Linux/macOS) |
+| ~10 GB free disk | Ollama model (~4.7 GB) + Docker images + run outputs |
+
+> FEBio is proprietary and not bundled. The `setup.sh` script finds it automatically if installed to a standard location, or you can specify the path manually.
 
 ---
 
-## What `setup.sh` does
+## Getting started
 
-Run once after cloning. It handles everything so you don't need to:
+### 1. Clone the repo
 
-1. Checks Docker, Docker Compose, and openssl are available
-2. Scans all required ports for conflicts and tells you exactly how to free them
-3. Finds the FEBio binary and writes its path to `.env`
-4. Creates the `runs/` directory and sets `RUNS_HOST_PATH` in `.env`
-5. Generates `.env.librechat` with fresh cryptographic secrets (JWT, credentials encryption, Meilisearch)
-6. Prints the complete startup guide
+```bash
+git clone https://github.com/slash543/simulation-api-tool.git
+cd simulation-api-tool
+```
 
----
+### 2. Add your FEB files
 
-## Starting the stack
+Copy your `.feb` simulation templates into `base_configuration/`:
+
+```bash
+cp /path/to/your_design.feb base_configuration/
+```
+
+FEB files follow this naming convention so the agent can parse them automatically:
+
+```
+<design_key>_<size>Fr[_<extra>]_ir<ir_value>.feb
+
+Examples:
+  ball_tip_14Fr_ir12.feb           → "Ball Tip", 14Fr, IR12
+  nelaton_tip_16Fr_ir25.feb        → "Nelaton Tip", 16Fr, IR25
+  vapro_introducer_tip_14Fr_ir12.feb → "Vapro Introducer Tip", 14Fr, IR12
+  tiemann_tip_14Fr_ir12.feb        → "Tiemann Tip", 14Fr, IR12  ← auto-detected
+```
+
+Any `.feb` file that does not follow this pattern is silently skipped by auto-discovery. You can still register it manually in `config/catheter_catalogue.yaml`.
+
+> **FEB files are gitignored** — they are never committed. Each VM/deployment maintains its own `base_configuration/` files.
+
+### 3. Run setup
+
+```bash
+chmod +x setup.sh && ./setup.sh
+```
+
+This runs once and does the following automatically:
+
+- Checks Docker, Docker Compose, and openssl are present
+- Scans ports 3080, 8000, 8001, 5000, 6379, 11434, 7700, 27017 for conflicts
+- Finds the FEBio binary and writes `FEBIO_BINARY_PATH` to `.env`
+- Sets `RUNS_HOST_PATH` to the project's `runs/` directory
+- Generates fresh cryptographic secrets in `.env.librechat` (JWT, credential encryption, Meilisearch key)
+- Prints a startup summary
+
+If `setup.sh` reports a port conflict, free that port and re-run before continuing.
+
+### 4. Start the stack
 
 ```bash
 docker compose -f docker-compose.librechat.yml up --build -d
 ```
 
-**Check all services are running:**
+**First run only:** Ollama downloads `qwen2.5:7b` (~4.7 GB). Wait for it before using the chat interface:
 
 ```bash
-docker compose -f docker-compose.librechat.yml ps
+docker compose -f docker-compose.librechat.yml logs -f ollama-init
+# Wait for: "Model pull complete."
 ```
 
-**Stop the stack:**
+### 5. Open the chat interface
+
+Go to **http://localhost:3080**, register an account, and start chatting.
+
+---
+
+## Using the chatbot
+
+The agent has the following capabilities. All are triggered through natural language.
+
+### Running a simulation
+
+```
+You:   I want to run a simulation
+Agent: Lists available catheter designs from base_configuration/
+You:   Ball Tip, 14Fr IR12, 15 mm/s uniform
+Agent: Confirms 10-step speed array, submits the job, reports the result folder
+```
+
+The agent returns immediately. The simulation runs in the background. You will be told:
+- `host_run_dir` — the folder on your machine where files appear (e.g. `runs/run_20260313_143000_a1b2/`)
+- `host_xplt_path` — the result file to open in FEBio Studio once the job finishes
+- Live solver output is written to `log.txt` in that folder
+
+### Listing jobs
+
+```
+You:   What simulations are running?
+You:   Show me my recent jobs
+You:   Where is the result file from my last run?
+```
+
+The agent calls `list_simulation_jobs` and shows all runs with their status (`running`, `completed`, `cancelled`), result paths, and timestamps.
+
+### Cancelling a simulation
+
+```
+You:   Cancel the simulation
+You:   Kill that job
+You:   Stop the current run
+```
+
+If you don't provide a `run_id`, the agent lists your jobs first so you can identify which one to stop. Cancellation takes effect within ~1 second.
+
+### Adding a new FEB file while the stack is running
 
 ```bash
-docker compose -f docker-compose.librechat.yml down
+cp /path/to/new_design.feb base_configuration/
 ```
+
+Then tell the agent:
+
+```
+You:   I added a new FEB file, can you see it?
+Agent: Calls refresh_catalogue, confirms the new design appears
+```
+
+No container restart needed.
+
+### Searching research documents
+
+Drop PDFs into `research_documents/` and ask questions:
+
+```
+You:   What material model is used for the urethra tissue?
+You:   What Young's modulus is assigned to the catheter body?
+```
+
+The agent searches indexed documents and cites the source PDF for every answer. New PDFs are indexed automatically at startup and periodically while running.
 
 ---
 
@@ -70,41 +167,99 @@ docker compose -f docker-compose.librechat.yml down
 
 | Port | Service | Purpose |
 |---|---|---|
-| 3080 | LibreChat UI | Main chat interface |
-| 8000 | Simulation API | FastAPI REST endpoints |
-| 8001 | MCP Server | Tool bridge between agent and API |
-| 5000 | MLflow | Experiment tracking |
-| 6379 | Redis | Celery task queue |
-| 11434 | Ollama | Local LLM |
-| 7700 | Meilisearch | LibreChat search index |
-| 27017 | MongoDB | LibreChat database |
+| **3080** | LibreChat UI | Main chat interface |
+| **8000** | Simulation API | FastAPI REST endpoints (`/api/v1/`) |
+| **8001** | MCP Server | Tool bridge between agent and API |
+| **5000** | MLflow | Experiment tracking |
+| **6379** | Redis | Celery task queue |
+| **11434** | Ollama | Local LLM |
+| **7700** | Meilisearch | LibreChat search index |
+| **27017** | MongoDB | LibreChat conversation database |
+
+**Check all services are healthy:**
+
+```bash
+docker compose -f docker-compose.librechat.yml ps
+curl http://localhost:8000/api/v1/health
+```
+
+**Stop everything:**
+
+```bash
+docker compose -f docker-compose.librechat.yml down
+```
 
 ---
 
-## LLM Strategy — Ollama (default) + Azure OpenAI (optional)
+## Simulation results
 
-The stack runs with **Ollama out of the box** — no credentials needed.  Azure OpenAI can be enabled later for faster, higher-quality responses.  When both are active, you select the model from the LibreChat UI per conversation.
+Every run creates a folder at `runs/run_YYYYMMDD_HHMMSS_xxxx/` on your host machine:
 
-| Endpoint | Model spec label | Requires |
-|---|---|---|
-| Ollama (local) | Digital Twin User Interface (Ollama) | Nothing — always active |
-| Azure OpenAI | Digital Twin User Interface (Azure OpenAI) | Azure API key + uncommenting config |
+| File | Description |
+|---|---|
+| `input.xplt` | FEBio result binary — open with **File → Open** in FEBio Studio |
+| `log.txt` | Live solver output — tail this to watch progress |
+| `input.feb` | The configured FEB file actually submitted to the solver |
+| `CANCEL` | Present only if the run was cancelled |
 
-### Enabling Azure OpenAI (both endpoints side-by-side)
+The `runs/` directory is gitignored. Results accumulate locally and are never pushed to the repo.
+
+---
+
+## Catheter designs
+
+The agent presents all designs discovered from `base_configuration/`. Each simulation requires:
+
+1. **Tip design** — e.g. Ball Tip, Nelaton Tip, Vapro Introducer Tip
+2. **Configuration** — catheter size × urethra model — e.g. 14Fr IR12, 16Fr IR12
+3. **10 insertion speeds** — one per step, in mm/s (valid range: 10–25 mm/s)
+   - Or give a single uniform speed: `"15 mm/s uniform"` → repeated across all 10 steps
+
+### Adding a new design
+
+**Simple way (recommended):** just name the file correctly and drop it in:
+
+```bash
+cp tiemann_tip_14Fr_ir12.feb base_configuration/
+```
+
+The file is auto-detected. If the stack is running, tell the agent to refresh the catalogue. No YAML or code changes needed.
+
+**Override the label:** add an entry in `config/catheter_catalogue.yaml`:
+
+```yaml
+designs:
+  tiemann_tip:
+    label: "Tiemann Tip"
+    configurations:
+      14Fr_IR12:
+        label: "14Fr catheter — IR12 urethra model"
+        feb_file: "tiemann_tip_14Fr_ir12.feb"
+```
+
+Only the load-curve timings and `time_steps` counts are modified at runtime — geometry, materials, and contact definitions are always preserved from the base file.
+
+---
+
+## LLM options
+
+The stack uses **Ollama with `qwen2.5:7b`** by default — no credentials required.
+
+### Optional: Azure OpenAI
+
+To add Azure OpenAI as a second option alongside Ollama:
 
 **Step 1 — fill in `.env.librechat`:**
 
 ```dotenv
-AZURE_OPENAI_API_KEY=<your-key-from-Azure-portal>
+AZURE_OPENAI_API_KEY=<your-key>
 AZURE_OPENAI_INSTANCE_NAME=<resource-name>   # subdomain only, e.g. my-openai-eastus
-                                              # NOT the full URL
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 AZURE_OPENAI_MINI_DEPLOYMENT_NAME=gpt-4o-mini
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
 ```
 
 **Step 2 — uncomment the Azure blocks in `librechat.yaml`:**
-
 - Uncomment the `azureOpenAI:` endpoint block (~line 32)
 - Uncomment the `DTUI-Azure` modelSpec block (~line 74)
 
@@ -114,238 +269,85 @@ AZURE_OPENAI_API_VERSION=2024-02-15-preview
 docker compose -f docker-compose.librechat.yml up -d librechat
 ```
 
-Both **"Digital Twin User Interface (Ollama)"** and **"Digital Twin User Interface (Azure OpenAI)"** will appear as selectable presets in the LibreChat UI.
+Both **"Digital Twin User Interface (Ollama)"** and **"Digital Twin User Interface (Azure OpenAI)"** will appear as selectable presets. You choose per conversation from the LibreChat UI.
 
-> **Important:** LibreChat validates every endpoint in `librechat.yaml` at startup. If `AZURE_OPENAI_API_KEY` is set in `.env.librechat` but the `azureOpenAI:` block is still commented out (or vice versa), LibreChat will start fine — Azure is only active when **both** the env vars and the YAML block are configured. Never set the key without also uncommenting the YAML block, or leave the block uncommented without a valid key — either mismatch will cause a startup crash.
-
----
-
-## Simulation results
-
-Every run writes files to `runs/run_YYYYMMDD_HHMMSS_xxxx/` on your host machine:
-
-| File | Purpose |
-|---|---|
-| `input.xplt` | FEBio result — open in FEBio Studio: **File → Open** |
-| `log.txt` | Live solver progress |
-| `input.feb` | Configured input file used for this run |
+> If you set `AZURE_OPENAI_API_KEY` but leave the YAML block commented out (or vice versa), LibreChat will crash at startup. Either configure both or configure neither.
 
 ---
 
-## Running Python scripts independently
+## REST API
 
-All analysis scripts can be run directly from a terminal — no Docker, no FastAPI server, no Celery required.
+All chatbot capabilities are also available as direct HTTP calls:
 
-### Prerequisites
-
-```bash
-# One-time: create the virtual environment and install dependencies
-chmod +x setup.sh && ./setup.sh
-```
-
-### Rule: always run from the project root with the venv Python
-
-```bash
-cd /path/to/simulation-api-tool
-
-# Good — uses the venv Python which has all packages installed
-.venv/bin/python scripts/my_script.py
-
-# Bad — system Python lacks the project packages
-python scripts/my_script.py
-```
-
-Alternatively, activate the venv once for your session:
-
-```bash
-source .venv/bin/activate
-python scripts/my_script.py   # now works
-deactivate                     # when done
-```
-
-### Quick sanity check
-
-```bash
-cd simulation-api-tool
-.venv/bin/python -c "from digital_twin_ui.extraction.xplt_parser import XpltParser; print('OK')"
-```
-
----
-
-### extract_pressure.py — Extract contact pressure from an xplt file
-
-Parses a FEBio `.xplt` result file and produces:
-- **CSV** — `facet_id, surface_name, surface_id, speed_mm_s, facet_area, time_step, time_s, contact_pressure`
-- **PNG** — grid of contact-pressure contour snapshots at evenly-spaced timesteps (cylindrical unroll)
-- **GIF** — animated contour cycling through every timestep (optional)
-
-**Step 1 — inspect the file to see available surfaces:**
-
-```bash
-.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt --list
-```
-
-```
-Surfaces:
-  id=3  faces= 23734  name='catheter_slidePrimary'
-  id=4  faces= 10571  name='catheter_slideSecondary'
-  ...
-Surface variables : ['contact pressure', 'contact gap', ...]
-```
-
-**Step 2 — extract to CSV + contour plot:**
-
-```bash
-.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
-    --surface "catheter_slidePrimary" \
-    --speed 5.0 \
-    --output-dir results/
-```
-
-**All options:**
-
-| Flag | Default | Description |
+| Method | Endpoint | Description |
 |---|---|---|
-| `--surface NAME` | first surface | Surface name (use `--list` to see choices) |
-| `--speed N` | `5.0` | Insertion speed in mm/s (stored as metadata in CSV) |
-| `--variable NAME` | `contact pressure` | Surface variable to extract |
-| `--output-dir DIR` | `results/` | Directory for output files |
-| `--list` | — | Print surfaces and variables, then exit |
-| `--no-plot` | — | CSV only — skip PNG and GIF generation |
-| `--animate` | — | Also save an animated GIF (requires Pillow) |
+| `GET` | `/api/v1/health` | API health check |
+| `GET` | `/api/v1/catheter-designs` | List all designs |
+| `POST` | `/api/v1/catheter-designs/refresh` | Rescan `base_configuration/` |
+| `POST` | `/api/v1/simulations/run-catheter` | Submit a simulation job |
+| `GET` | `/api/v1/simulations` | List all simulation runs |
+| `GET` | `/api/v1/simulations/{task_id}` | Poll job status |
+| `POST` | `/api/v1/simulations/cancel` | Cancel a running job |
+| `GET` | `/api/v1/templates` | List YAML-defined templates |
+| `POST` | `/api/v1/doe/run` | Submit a DOE campaign |
 
-**Output files** (in `--output-dir`):
+Interactive docs: **http://localhost:8000/docs**
 
-| File | Contents |
-|---|---|
-| `<stem>_<surface>_pressure.csv` | Full time-series table |
-| `<stem>_<surface>_contour.png` | 12-panel contour snapshot grid |
-| `<stem>_<surface>_animation.gif` | Animated contour (`--animate` only) |
+---
 
-**Examples:**
+## Standalone scripts
+
+Scripts can be run directly without Docker. Requires the project venv:
 
 ```bash
-# CSV only (skip plots — fastest):
-.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
+# One-time: setup.sh creates the venv and installs dependencies
+chmod +x setup.sh && ./setup.sh
+
+# Always run from the project root using the venv Python
+cd simulation-api-tool
+.venv/bin/python scripts/extract_pressure.py ...
+```
+
+### extract_pressure.py
+
+Parses a `.xplt` result file and produces CSV output and optional contour plots.
+
+```bash
+# Inspect surfaces and variables in a file
+.venv/bin/python scripts/extract_pressure.py path/to/result.xplt --list
+
+# Extract to CSV + contour PNG
+.venv/bin/python scripts/extract_pressure.py path/to/result.xplt \
+    --surface "catheter_slidePrimary" \
+    --speed 15.0 \
+    --output-dir results/
+
+# CSV only (skip plots)
+.venv/bin/python scripts/extract_pressure.py path/to/result.xplt \
     --surface "catheter_slidePrimary" --no-plot
 
-# Both contact surfaces, separate output files:
-.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
-    --surface "catheter_slidePrimary" --output-dir results/
-
-.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
-    --surface "catheter_slideSecondary" --output-dir results/
-
-# With animation:
-.venv/bin/python scripts/extract_pressure.py conf_file/DT_BT_14Fr_FO_10E_IR12.xplt \
+# With animated GIF
+.venv/bin/python scripts/extract_pressure.py path/to/result.xplt \
     --surface "catheter_slidePrimary" --animate --output-dir results/
 ```
 
----
+Output files in `--output-dir`:
 
-## Research Documents (RAG)
-
-Add PDFs to `research_documents/` and the agent can answer questions about them with source citations.
-
-### Adding documents
-
-Drop PDFs into `research_documents/` — the API detects them automatically:
-
-```bash
-cp my_paper.pdf research_documents/
-```
-
-The API scans `research_documents/` at startup and again every 60 seconds.  New PDFs are ingested automatically; already-indexed PDFs are skipped.  You do not need to call any endpoint manually.
-
-To force re-ingest after replacing a PDF with an updated version:
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/documents/ingest?force=true"
-```
-
-### Asking questions
-
-> *"What material model is used for the urethra tissue?"*
-> *"What is the Young's modulus of the catheter body?"*
-> *"Explain the contact algorithm used in FEBio."*
-
-The agent retrieves relevant chunks and cites the source PDF for every piece of information.
-
-### RAG stack — all open-source, commercial use permitted
-
-| Component | Library | License |
-|---|---|---|
-| PDF parsing + OCR | `docling` | MIT |
-| Embeddings | `sentence-transformers` (BAAI/bge-small-en-v1.5) | Apache 2.0 / MIT |
-| Vector store | `chromadb` | Apache 2.0 |
-
-Everything runs locally — no external API calls required.
+| File | Contents |
+|---|---|
+| `<stem>_<surface>_pressure.csv` | `facet_id, surface_name, time_s, contact_pressure, ...` |
+| `<stem>_<surface>_contour.png` | 12-panel contour snapshot grid |
+| `<stem>_<surface>_animation.gif` | Animated contour (`--animate` only) |
 
 ---
 
-## Catheter Designs
+## Running tests
 
-The agent guides the user through design selection before running a simulation:
-
-1. **Choose tip design** — Ball Tip, Nelaton Tip, or Vapro Introducer
-2. **Choose configuration** — catheter size × urethra model (e.g. 14Fr IR12, 16Fr IR12)
-3. **Provide 10 insertion speeds** (one per step), or ask for a uniform value between 10–25 mm/s
-
-Base FEB files live in `base_configuration/`.  Replace any file with updated geometry and the system continues to work — only load curve timings and step counts are modified, never geometry or materials.
-
----
-
-## Troubleshooting
-
-**Ollama "model not found" in LibreChat**
-The model is still downloading. Check progress:
 ```bash
-docker compose -f docker-compose.librechat.yml logs ollama-init
-```
-Wait for `"Model pull complete."` then refresh LibreChat.
-
-**Port already in use**
-```bash
-sudo lsof -i TCP:<port> -sTCP:LISTEN   # find the PID
-sudo kill -9 <PID>
-# or: sudo fuser -k <port>/tcp
-```
-Re-run `setup.sh` to verify all ports are free.
-
-**Simulation fails (exit 127)**
-FEBio binary path is wrong. Check:
-```bash
-cat .env | grep FEBIO_BINARY_PATH
-```
-Update the path and restart the worker:
-```bash
-docker compose -f docker-compose.librechat.yml restart worker
+.venv/bin/pytest tests/ -v
 ```
 
-**RAG endpoints return 500 / "RAG dependencies not installed"**
-The Docker image was built before `chromadb`, `sentence-transformers`, and `docling` were added to `requirements.txt`.  Rebuild the image:
-```bash
-docker compose -f docker-compose.librechat.yml build api worker
-docker compose -f docker-compose.librechat.yml up -d api worker
-```
-
-**RAG endpoints return 404 "research_documents/ directory not found"**
-The bind-mount was missing.  After pulling the latest code, rebuild and restart:
-```bash
-git pull
-docker compose -f docker-compose.librechat.yml up -d --build api worker
-```
-
-**LibreChat won't start after setting Azure OpenAI key**
-LibreChat crashes if the Azure key is set in `.env.librechat` but the `azureOpenAI:` block in `librechat.yaml` is still commented out, or if the block is uncommented but `AZURE_OPENAI_INSTANCE_NAME` is empty.
-Two options:
-- **Use Ollama only:** leave the `azureOpenAI:` block commented out and clear `AZURE_OPENAI_API_KEY=` in `.env.librechat`.
-- **Use both:** fill in all `AZURE_OPENAI_*` vars **and** uncomment both the endpoint block and the `DTUI-Azure` modelSpec in `librechat.yaml` (see [Enabling Azure OpenAI](#enabling-azure-openai-both-endpoints-side-by-side) above).
-
-**LibreChat won't start (other reasons)**
-```bash
-docker compose -f docker-compose.librechat.yml logs librechat --tail=50
-```
+The test suite does not require Docker, FEBio, or a running API server. All external calls are mocked.
 
 ---
 
@@ -354,7 +356,7 @@ docker compose -f docker-compose.librechat.yml logs librechat --tail=50
 ```
 User  ──►  LibreChat UI  (port 3080)
                 │
-                │  tool calls via MCP (SSE)
+                │  tool calls via MCP/SSE
                 ▼
           MCP Server  (port 8001)
                 │
@@ -362,19 +364,81 @@ User  ──►  LibreChat UI  (port 3080)
                 ▼
           Simulation API  (port 8000, FastAPI)
                 │
-       ┌────────┼─────────┐
-       ▼        ▼         ▼
-  Celery     MLflow    ChromaDB
-  Worker    (port 5000)  (local)
+       ┌────────┼──────────────────┐
+       ▼        ▼                  ▼
+  Celery     MLflow             ChromaDB
+  Worker    (port 5000)         (local disk)
   (FEBio)
+       │
+       ▼
+  base_configuration/*.feb  →  runs/run_*/input.xplt
+```
+
+- **LibreChat** — chat frontend; routes tool calls through the MCP server
+- **MCP Server** — thin bridge; translates agent tool calls into HTTP requests to the API
+- **Simulation API** — FastAPI; handles requests, enqueues Celery tasks, manages run directories
+- **Celery Worker** — runs FEBio subprocesses; polls for cancellation every ~1 second
+- **MLflow** — optional experiment tracking for DOE campaigns
+- **ChromaDB** — local vector store for research document search
+
+---
+
+## Troubleshooting
+
+**Ollama not ready — "model not found" in LibreChat**
+```bash
+docker compose -f docker-compose.librechat.yml logs -f ollama-init
+# Wait for: "Model pull complete."
+```
+
+**Port already in use**
+```bash
+sudo lsof -i TCP:<port> -sTCP:LISTEN    # find the process
+sudo kill -9 <PID>
+```
+Re-run `setup.sh` to confirm all ports are free before starting.
+
+**FEBio not found — simulation fails with exit 127**
+```bash
+cat .env | grep FEBIO_BINARY_PATH        # check the path
+which febio4                             # find the actual binary
+```
+Update `FEBIO_BINARY_PATH` in `.env` and restart the worker:
+```bash
+docker compose -f docker-compose.librechat.yml restart worker
+```
+
+**New FEB file not appearing in the agent menu**
+
+If you added a file while the stack was running:
+```
+You:  refresh the catalogue
+```
+Or from the terminal:
+```bash
+curl -X POST http://localhost:8000/api/v1/catheter-designs/refresh
+```
+If it still does not appear, check that the filename matches the naming convention (`<design>_<size>Fr[_extra]_ir<ir>.feb`).
+
+**RAG returns 503 / store is empty**
+```bash
+curl -X POST "http://localhost:8000/api/v1/documents/ingest"
+```
+Or ask the agent: `"ingest the research documents"`.
+
+**LibreChat won't start after setting Azure credentials**
+Either fill in all `AZURE_OPENAI_*` vars in `.env.librechat` and uncomment the Azure blocks in `librechat.yaml`, or leave both untouched (Ollama-only mode). A partial configuration causes a crash.
+
+**Logs for any service**
+```bash
+docker compose -f docker-compose.librechat.yml logs <service> --tail=50
+# Services: librechat, api, worker, mcp-server, ollama, ollama-init, mlflow, redis
 ```
 
 ---
 
 ## License
 
-MIT — free for commercial use.
-
-All dependencies are Apache 2.0, MIT, BSD-3-Clause, or PSF licensed.
+MIT — free for commercial use. All dependencies are Apache 2.0, MIT, BSD-3-Clause, or PSF licensed.
 
 > Research prototype. Not for clinical use.
