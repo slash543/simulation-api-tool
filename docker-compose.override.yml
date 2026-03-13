@@ -28,6 +28,10 @@ services:
       - logs_data:/app/logs
       - datasets_data:/app/data
       - models_data:/app/models
+      # .feb base files — must be explicit here so they are not lost when Docker
+      # Compose applies this override on top of the base file's x-app-volumes anchor.
+      - ${BASE_CONFIG_HOST_PATH:-./base_configuration}:/app/base_configuration:ro
+      - ./research_documents:/app/research_documents
     environment:
       DTUI__API__LOG_LEVEL: "debug"
       DTUI__LOGGING__LEVEL: "DEBUG"
@@ -50,6 +54,10 @@ services:
       - logs_data:/app/logs
       - datasets_data:/app/data
       - models_data:/app/models
+      # .feb base files — must be explicit here so they are not lost when Docker
+      # Compose applies this override on top of the base file's x-app-volumes anchor.
+      - ${BASE_CONFIG_HOST_PATH:-./base_configuration}:/app/base_configuration:ro
+      - ./research_documents:/app/research_documents
     environment:
       DTUI__LOGGING__LEVEL: "DEBUG"
     command: >

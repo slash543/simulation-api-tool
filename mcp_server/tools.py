@@ -25,7 +25,7 @@ HTTP_FAST_TIMEOUT: float = float(os.getenv("HTTP_FAST_TIMEOUT", "15"))
 # users can open result files directly in FEBio Studio.
 RUNS_HOST_PATH: str = os.getenv(
     "RUNS_HOST_PATH",
-    "/home/anukaran/simulation-api-tool/runs",
+    "./runs",
 )
 _CONTAINER_RUNS_PREFIX = "/app/runs"
 

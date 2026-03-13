@@ -38,7 +38,8 @@ x-app-volumes: &app-volumes
   # base_configuration: host folder with .feb files — bind-mounted read-only so the
   # API and worker can resolve FEB paths and auto-discover new files on startup.
   # Drop a new .feb file here and restart the stack; no YAML or code changes needed.
-  - ./base_configuration:/app/base_configuration:ro
+  # Override BASE_CONFIG_HOST_PATH in .env to point at a different folder on the host.
+  - ${BASE_CONFIG_HOST_PATH:-./base_configuration}:/app/base_configuration:ro
   # RAG: host research_documents/ is bind-mounted so the API can read PDFs
   # and ChromaDB embeddings are persisted in the datasets_data volume at /app/data/chroma
   - ./research_documents:/app/research_documents
