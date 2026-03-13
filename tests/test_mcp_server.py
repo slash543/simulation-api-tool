@@ -358,12 +358,31 @@ class TestMcpServerRegistration:
         from server import mcp  # noqa: PLC0415
 
         tool_names = {t.name for t in mcp._tool_manager.list_tools()}
-        # Only 3 core simulation tools — designs are hardcoded in instructions.
-        assert tool_names == {
+        expected = {
+            # health
+            "health_check",
+            # catheter designs & templates
+            "list_catheter_designs",
+            "list_templates",
+            "refresh_catalogue",
+            # simulations
             "run_catheter_simulation",
             "list_simulation_jobs",
+            "get_task_status",
             "cancel_simulation",
+            # DOE
+            "run_doe_campaign",
+            "get_doe_status",
+            "preview_doe_speeds",
+            # ML
+            "predict_pressure",
+            "predict_pressure_batch",
+            # RAG
+            "list_research_documents",
+            "ingest_research_documents",
+            "search_research_documents",
         }
+        assert tool_names == expected
 
     def test_server_name(self) -> None:
         from server import mcp  # noqa: PLC0415

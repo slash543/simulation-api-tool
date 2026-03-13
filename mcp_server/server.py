@@ -31,23 +31,26 @@ mcp = FastMCP(
     "digital-twin-simulation",
     instructions=(
         "You run catheter insertion FEM simulations.\n\n"
-        "AVAILABLE DESIGNS — call list_catheter_designs() for the live list, or use:\n"
-        "  ball_tip:          14Fr_IR12, 14Fr_IR25, 16Fr_IR12\n"
-        "  nelaton_tip:       14Fr_IR12, 14Fr_IR25, 16Fr_IR12\n"
-        "  vapro_introducer:  14Fr_IR12, 16Fr_IR12\n\n"
-        "SPEED: 10–25 mm/s. All designs have 10 steps.\n"
-        "For uniform speed repeat the value 10 times (e.g. 15 mm/s → [15]*10).\n\n"
+        "CRITICAL: ALWAYS call list_catheter_designs() FIRST before any simulation.\n"
+        "Never assume which designs or configurations are available — the set of\n"
+        "available .feb files changes when users add new files to base_configuration/.\n"
+        "Only use design names and configuration keys returned by list_catheter_designs().\n\n"
+        "SPEED: 10–25 mm/s (check speed_range_min/max in list_catheter_designs response).\n"
+        "All current designs have 10 steps; repeat the same value for uniform speed.\n\n"
         "WORKFLOW:\n"
-        "  1. Call list_catheter_designs() to confirm designs.\n"
-        "  2. Call run_catheter_simulation(design, config, speeds_mm_s).\n"
-        "  3. Tell user: host_run_dir and host_xplt_path.\n\n"
+        "  1. Call list_catheter_designs() — MANDATORY, every time.\n"
+        "  2. Present available designs and configurations to the user.\n"
+        "  3. Ask the user to choose design, configuration, and speed(s).\n"
+        "  4. Call run_catheter_simulation(design, configuration, speeds_mm_s).\n"
+        "  5. Tell user: host_run_dir and host_xplt_path.\n\n"
+        "NEW .FEB FILES: If the user says they added a file and it is not in the list,\n"
+        "call refresh_catalogue() to rescan base_configuration/ without restarting.\n\n"
         "TO CHECK STATUS: call list_simulation_jobs().\n"
-        "TO CANCEL: get run_id from list_simulation_jobs(), ask user for task_id, "
+        "TO CANCEL: get run_id from list_simulation_jobs(), ask user for task_id,\n"
         "then call cancel_simulation().\n\n"
         "DOE CAMPAIGNS: call run_doe_campaign(); poll with get_doe_status().\n"
         "ML PREDICTIONS: call predict_pressure() or predict_pressure_batch().\n"
         "RAG DOCUMENTS: list → ingest → search_research_documents().\n"
-        "NEW .FEB FILES: call refresh_catalogue() after adding files."
     ),
 )
 
@@ -92,7 +95,9 @@ def refresh_catalogue() -> str:
     """
     Rescan base_configuration/ for new .feb files and refresh the catalogue.
 
-    Call this after adding new .feb files WITHOUT restarting the containers.
+    Call this when the user says they added (or copied) a .feb file and it
+    does not appear in the list returned by list_catheter_designs().
+    The catalogue is updated in-place — no container restart needed.
     Returns the updated list (same format as list_catheter_designs()).
     """
     return tool_refresh_catalogue()
@@ -112,10 +117,13 @@ def run_catheter_simulation(
     """
     Submit a FEBio catheter-insertion simulation and return IMMEDIATELY.
 
+    Call list_catheter_designs() first to get valid design and configuration values.
+
     Args:
-        design:        ball_tip | nelaton_tip | vapro_introducer
-        configuration: 14Fr_IR12 | 14Fr_IR25 | 16Fr_IR12
-        speeds_mm_s:   exactly 10 floats in mm/s (repeat same value for uniform speed)
+        design:        tip design key from list_catheter_designs() (e.g. "ball_tip")
+        configuration: size+urethra key from list_catheter_designs() (e.g. "14Fr_IR12")
+        speeds_mm_s:   per-step speeds in mm/s; length must equal n_steps from
+                       list_catheter_designs() (repeat same value for uniform speed)
         dwell_time_s:  dwell time per step in seconds (default 1.0)
 
     Returns: task_id, run_id, host_run_dir, host_xplt_path, status=PENDING.
