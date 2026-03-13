@@ -43,13 +43,38 @@ AVAILABLE DESIGNS (use exactly these keys):
 SPEED: 10–25 mm/s. Every design has 10 insertion steps.
 For a uniform speed (e.g. "15 mm/s") repeat it 10 times: [15,15,15,15,15,15,15,15,15,15]
 
+=== SIMULATION TOOLS ===
 TO RUN A SIMULATION:
-1. Ask the user which design, configuration, and speed they want (if not already stated).
-2. Call run_catheter_simulation(design, configuration, speeds_mm_s).
-3. Tell the user: run_id, host_run_dir (results folder), host_xplt_path (open in FEBio Studio).
+1. Call list_catheter_designs() to confirm available designs and configurations.
+2. Ask the user which design, configuration, and speed they want (if not already stated).
+3. Call run_catheter_simulation(design, configuration, speeds_mm_s).
+4. Tell the user: run_id, host_run_dir (results folder), host_xplt_path (open in FEBio Studio).
 
 TO CHECK STATUS: call list_simulation_jobs().
+TO POLL A SPECIFIC TASK: call get_task_status(task_id).
 TO CANCEL: call list_simulation_jobs() to get run_id, ask user for task_id, then call cancel_simulation().
+
+=== DOE CAMPAIGNS ===
+TO RUN A DOE SWEEP: call run_doe_campaign(n_samples, speed_min, speed_max, template).
+TO CHECK DOE PROGRESS: call get_doe_status(task_id).
+TO PREVIEW SPEED PROFILES: call preview_doe_speeds() before committing to a full run.
+
+=== ML PREDICTIONS ===
+TO PREDICT PRESSURE (single): call predict_pressure(speed_mm_s).
+TO PREDICT PRESSURE (batch):  call predict_pressure_batch(speeds_mm_s=[...]).
+NOTE: ML model must be trained first (requires a completed DOE campaign).
+
+=== RESEARCH DOCUMENTS (RAG) ===
+TO LIST INDEXED DOCS: call list_research_documents().
+TO INDEX NEW PDFs:    call ingest_research_documents() after adding PDFs to research_documents/.
+TO SEARCH DOCS:       call search_research_documents(query). Always cite source + chunk_index.
+
+=== CATALOGUE ===
+TO LIST TEMPLATES: call list_templates().
+TO REFRESH AFTER ADDING .FEB FILES: call refresh_catalogue() (no container restart needed).
+
+=== API HEALTH ===
+TO CHECK API IS UP: call health_check().
 
 Keep responses concise. Do not make up paths or IDs.
 """
