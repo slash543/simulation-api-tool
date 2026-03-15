@@ -15,10 +15,10 @@ import httpx
 
 API_BASE: str = os.getenv("SIMULATION_API_URL", "http://api:8000/api/v1")
 HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "30"))
-# Fast timeout for read-only listing calls — these should return in <1 s when
-# the API is healthy.  A short deadline means the LLM gets an error message
-# immediately instead of hanging for minutes.
-HTTP_FAST_TIMEOUT: float = float(os.getenv("HTTP_FAST_TIMEOUT", "15"))
+# Timeout for read-only listing calls.  30 s gives enough headroom for the
+# first-ever catalogue load (YAML parse + directory scan) on a cold API
+# container without blocking the LLM for an unreasonable amount of time.
+HTTP_FAST_TIMEOUT: float = float(os.getenv("HTTP_FAST_TIMEOUT", "30"))
 
 # Host-side path to the runs directory (Docker volume mount point on the host).
 # Used to translate container-internal /app/runs/... paths to host paths so

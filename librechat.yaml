@@ -77,7 +77,7 @@ endpoints:
 # MCP Servers  (tools available to LibreChat Agents)
 # ---------------------------------------------------------------------------
 mcpServers:
-  simulation-tools:
+  simulation_tools:
     type: sse
     url: "http://mcp-server:8001/sse"
     # timeout for individual tool calls (ms) — simulations can take ~5 min

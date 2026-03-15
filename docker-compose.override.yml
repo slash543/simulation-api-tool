@@ -58,6 +58,11 @@ services:
       # Compose applies this override on top of the base file's x-app-volumes anchor.
       - ${BASE_CONFIG_HOST_PATH:-./base_configuration}:/app/base_configuration:ro
       - ./research_documents:/app/research_documents
+      # FEBio binary — required even in dev mode to actually run simulations
+      - ./scripts/febio4_wrapper.sh:/usr/local/bin/febio4:ro
+      - ${FEBIO_BINARY_PATH:-/opt/febio/bin/febio4}:/opt/febio/bin/febio4:ro
+      - ${FEBIO_XML_PATH:-/opt/febio/bin/febio.xml}:/opt/febio/bin/febio.xml:ro
+      - ${FEBIO_LIB_PATH:-/opt/febio/lib}:/opt/febio/lib:ro
     environment:
       DTUI__LOGGING__LEVEL: "DEBUG"
     command: >
