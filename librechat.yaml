@@ -20,6 +20,7 @@ cache: true
 # Interface
 # ---------------------------------------------------------------------------
 interface:
+  appTitle: "Digital Twin User Interface"
   endpointsMenu: true
   modelSelect: true
   parameters: true

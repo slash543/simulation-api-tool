@@ -179,6 +179,11 @@ services:
     volumes:
       # Application config (Ollama endpoint + MCP server definition)
       - ./librechat.yaml:/app/librechat.yaml:ro
+      # Custom branding — replaces the LibreChat logo on the login page and nav header
+      # LibreChat serves static files from dist/assets (not public/assets)
+      - ./branding/dtui-logo.svg:/app/client/dist/assets/logo.svg:ro
+      # Custom index.html injects CSS to enlarge and center the logo
+      - ./branding/index.html:/app/client/dist/index.html:ro
       # Persistent storage for uploaded images and server logs
       - librechat_images:/app/client/public/images
       - librechat_logs:/app/api/logs
@@ -189,6 +194,7 @@ services:
       PORT: "3080"
       MONGO_URI: "mongodb://librechat-mongodb:27017/LibreChat"
       MEILI_HOST: "http://librechat-meilisearch:7700"
+      APP_TITLE: "Digital Twin User Interface"
     depends_on:
       librechat-mongodb:
         condition: service_healthy
