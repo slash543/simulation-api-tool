@@ -57,6 +57,15 @@ COPY requirements.txt .
 # Install into a dedicated prefix so we can copy it cleanly to later stages
 RUN pip install --prefix=/install -r requirements.txt
 
+# Install surrogate-lab (neural network surrogate) and xplt-parser
+# These are needed by the surrogate API endpoints (contact pressure prediction,
+# CSAR computation, VTP annotation).
+COPY surrogate-lab/ /tmp/surrogate-lab/
+COPY xplt-parser/   /tmp/xplt-parser/
+RUN pip install --prefix=/install /tmp/surrogate-lab/ && \
+    pip install --prefix=/install /tmp/xplt-parser/ && \
+    rm -rf /tmp/surrogate-lab /tmp/xplt-parser
+
 
 # --------------------------------------------------------------------------- #
 # Stage 3: api — FastAPI / Uvicorn production image                            #

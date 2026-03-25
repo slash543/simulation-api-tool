@@ -10,6 +10,9 @@ from mcp.server.fastmcp import FastMCP
 
 from tools import (
     tool_cancel_simulation,
+    tool_compute_csar_from_vtp,
+    tool_compute_csar_vs_depth,
+    tool_evaluate_contact_pressure,
     tool_get_doe_status,
     tool_get_task_status,
     tool_health_check,
@@ -17,9 +20,11 @@ from tools import (
     tool_list_catheter_designs,
     tool_list_research_documents,
     tool_list_simulation_jobs,
+    tool_list_surrogate_models,
     tool_list_templates,
     tool_predict_pressure,
     tool_predict_pressure_batch,
+    tool_predict_vtp_contact_pressure,
     tool_preview_doe_speeds,
     tool_refresh_catalogue,
     tool_run_catheter_simulation,
@@ -30,27 +35,41 @@ from tools import (
 mcp = FastMCP(
     "digital-twin-simulation",
     instructions=(
-        "You run catheter insertion FEM simulations.\n\n"
+        "You are the Digital Twin User Interface simulation assistant.\n\n"
+        "You have two capability groups:\n\n"
+        "═══ GROUP 1: FEM SIMULATIONS ═══\n"
         "CRITICAL: ALWAYS call list_catheter_designs() FIRST before any simulation.\n"
-        "Never assume which designs or configurations are available — the set of\n"
-        "available .feb files changes when users add new files to base_configuration/.\n"
-        "Only use design names and configuration keys returned by list_catheter_designs().\n\n"
+        "Never assume which designs or configurations are available.\n"
         "SPEED: 10–25 mm/s (check speed_range_min/max in list_catheter_designs response).\n"
         "All current designs have 10 steps; repeat the same value for uniform speed.\n\n"
-        "WORKFLOW:\n"
+        "FEM WORKFLOW:\n"
         "  1. Call list_catheter_designs() — MANDATORY, every time.\n"
         "  2. Present available designs and configurations to the user.\n"
         "  3. Ask the user to choose design, configuration, and speed(s).\n"
         "  4. Call run_catheter_simulation(design, configuration, speeds_mm_s).\n"
         "  5. Tell user: host_run_dir and host_xplt_path.\n\n"
-        "NEW .FEB FILES: If the user says they added a file and it is not in the list,\n"
-        "call refresh_catalogue() to rescan base_configuration/ without restarting.\n\n"
+        "NEW .FEB FILES: call refresh_catalogue() to rescan without restarting.\n"
+        "DOE CAMPAIGNS: run_doe_campaign(); poll with get_doe_status().\n"
+        "RAG DOCUMENTS: list → ingest → search_research_documents().\n\n"
+        "═══ GROUP 2: SURROGATE MODEL (instant predictions) ═══\n"
+        "The surrogate model is a neural network trained on FEM results.\n"
+        "It predicts per-facet contact pressure instantly (no FEM needed).\n\n"
+        "FIRST CHECK: Always call list_surrogate_models() to verify the model is\n"
+        "available (latest_available=true) before calling surrogate tools.\n"
+        "If the model is NOT available, tell the user to run the full_pipeline\n"
+        "notebook (notebooks/full_pipeline.ipynb) to train the model.\n\n"
+        "SURROGATE TOOLS:\n"
+        "  list_surrogate_models()          — check model availability + MLflow history\n"
+        "  evaluate_contact_pressure(depths, ...) — mean/max cp at given depths\n"
+        "  compute_csar_vs_depth(z_bands, ...) — CSAR vs insertion depth per Z band\n"
+        "  predict_vtp_contact_pressure(vtp_path, depth, ...) — annotate VTP file\n"
+        "  compute_csar_from_vtp(vtp_path, z_bands, ...) — CSAR using VTP geometry\n\n"
+        "Z BANDS: must specify at least one {'zmin': float, 'zmax': float, 'label': str}.\n"
+        "Example: [{'zmin': 0, 'zmax': 50, 'label': 'distal_tip'}]\n\n"
+        "VTP PATHS: container paths under /app/surrogate_data/ or /app/runs/.\n"
+        "The host_output_path in responses shows where to find the file locally.\n\n"
         "TO CHECK STATUS: call list_simulation_jobs().\n"
-        "TO CANCEL: get run_id from list_simulation_jobs(), ask user for task_id,\n"
-        "then call cancel_simulation().\n\n"
-        "DOE CAMPAIGNS: call run_doe_campaign(); poll with get_doe_status().\n"
-        "ML PREDICTIONS: call predict_pressure() or predict_pressure_batch().\n"
-        "RAG DOCUMENTS: list → ingest → search_research_documents().\n"
+        "TO CANCEL: get run_id from list_simulation_jobs(), then cancel_simulation().\n"
     ),
 )
 
@@ -301,6 +320,136 @@ def search_research_documents(query: str, n_results: int = 5) -> str:
     Returns: query, total_hits, hits (text, source, chunk_index, score).
     """
     return tool_search_research_documents(query, n_results)
+
+
+# ---------------------------------------------------------------------------
+# Surrogate model tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def list_surrogate_models() -> str:
+    """
+    List trained surrogate models from MLflow and check if the 'latest' model
+    is available for predictions.
+
+    ALWAYS call this first before using any surrogate tool, to verify that
+    latest_available=true. If false, ask the user to run the training notebook.
+
+    Returns: models (list of run_id, metrics), latest_available (bool).
+    """
+    return tool_list_surrogate_models()
+
+
+@mcp.tool()
+def evaluate_contact_pressure(
+    insertion_depths_mm: list[float],
+    facets_csv_path: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """
+    Compute mean/max contact pressure vs insertion depth using the surrogate model.
+
+    Orders of magnitude faster than FEM. Requires a trained surrogate model.
+
+    Args:
+        insertion_depths_mm: List of insertion depths [mm] to evaluate.
+                             Example: [0, 50, 100, 150, 200, 250, 300]
+        facets_csv_path: Container path to reference facets CSV.
+                         Default: uses data/surrogate/training/reference_facets.csv
+        run_id: MLflow run ID. None = latest trained model.
+
+    Returns: insertion_depths_mm, mean_cp_MPa, max_cp_MPa, csar per depth.
+    """
+    return tool_evaluate_contact_pressure(insertion_depths_mm, facets_csv_path, run_id)
+
+
+@mcp.tool()
+def compute_csar_vs_depth(
+    z_bands: list[dict],
+    insertion_depths_mm: list[float] | None = None,
+    max_depth_mm: float = 300.0,
+    depth_step_mm: float = 5.0,
+    facets_csv_path: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """
+    Compute Contact Surface Area Ratio (CSAR) vs insertion depth for given Z bands.
+
+    CSAR = fraction of catheter surface area in contact with tissue at each depth.
+    Results are broken down by Z-band (region along catheter shaft).
+
+    Args:
+        z_bands: List of Z-band dicts: [{"zmin": 0.0, "zmax": 50.0, "label": "tip"}]
+                 Specify one or more bands to analyse simultaneously.
+        insertion_depths_mm: Specific depths [mm] to evaluate. None = auto grid.
+        max_depth_mm: Upper limit for auto-generated depth grid (default 300).
+        depth_step_mm: Step size for auto grid (default 5 mm).
+        facets_csv_path: Container path to facets CSV. Default: reference_facets.csv.
+        run_id: MLflow run ID. None = latest model.
+
+    Returns: per-band CSAR series with csar, contact_area_mm2, n_contact_facets.
+    """
+    return tool_compute_csar_vs_depth(
+        z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm, facets_csv_path, run_id
+    )
+
+
+@mcp.tool()
+def predict_vtp_contact_pressure(
+    vtp_path: str,
+    insertion_depth_mm: float,
+    output_path: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """
+    Predict contact pressure on each facet of a VTP mesh and save a new VTP.
+
+    Reads facet geometry from the input VTP, runs surrogate inference at the
+    given insertion depth, and writes a new VTP with contact_pressure_MPa values.
+    The output file can be opened in ParaView for 3D pressure visualization.
+
+    Args:
+        vtp_path: Container path to input VTP file.
+                  Example: /app/surrogate_data/results/case_t0000.vtp
+                  Or from a run: /app/runs/run_XXXX/results_vtp/results_t0000.vtp
+        insertion_depth_mm: Catheter insertion depth [mm] for prediction.
+        output_path: Optional output path. Defaults to input_stem + '_predicted.vtp'.
+        run_id: MLflow run ID. None = latest model.
+
+    Returns: output_vtp_path, host_output_path (to open locally), n_faces.
+    """
+    return tool_predict_vtp_contact_pressure(vtp_path, insertion_depth_mm, output_path, run_id)
+
+
+@mcp.tool()
+def compute_csar_from_vtp(
+    vtp_path: str,
+    z_bands: list[dict],
+    insertion_depths_mm: list[float] | None = None,
+    max_depth_mm: float = 300.0,
+    depth_step_mm: float = 5.0,
+    run_id: str | None = None,
+) -> str:
+    """
+    Compute CSAR vs insertion depth using geometry from a specific VTP file.
+
+    Use this when you have a VTP file from a particular simulation and want
+    to evaluate CSAR at different insertion depths without re-running FEM.
+
+    Args:
+        vtp_path: Container path to VTP file (geometry source).
+                  Example: /app/runs/run_XXXX/results_vtp/results_t0000.vtp
+        z_bands: Z-band definitions: [{"zmin": 0.0, "zmax": 50.0, "label": "tip"}]
+        insertion_depths_mm: Depths to evaluate. None = auto grid.
+        max_depth_mm: Upper limit for auto grid (default 300 mm).
+        depth_step_mm: Step size for auto grid (default 5 mm).
+        run_id: MLflow run ID. None = latest model.
+
+    Returns: per-band CSAR series vs insertion depth.
+    """
+    return tool_compute_csar_from_vtp(
+        vtp_path, z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm, run_id
+    )
 
 
 # ---------------------------------------------------------------------------

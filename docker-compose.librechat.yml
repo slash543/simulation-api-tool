@@ -33,7 +33,7 @@
 #
 # Make it portable:
 #   The mcp-server container is the only piece that knows about the FastAPI
-#   URLs.  To connect a different chat UI (GitHub Copilot, Claude Desktop, …)
+#   URLs.  To connect any MCP-compatible chat UI or IDE extension,
 #   just point its MCP config at http://<host>:8001/sse.
 # =============================================================================
 
@@ -121,6 +121,9 @@ services:
       # Set RUNS_HOST_PATH in .env.librechat to the absolute path on YOUR machine.
       # e.g.  RUNS_HOST_PATH=/home/youruser/simulation-api-tool/runs
       RUNS_HOST_PATH: "${RUNS_HOST_PATH:-./runs}"
+      # Host-visible path for surrogate data (shown in tool responses)
+      # e.g.  SURROGATE_DATA_HOST_PATH=/home/youruser/simulation-api-tool/data/surrogate
+      SURROGATE_HOST_PATH: "${SURROGATE_DATA_HOST_PATH:-./data/surrogate}"
     depends_on:
       api:
         condition: service_healthy
@@ -210,6 +213,58 @@ services:
       timeout: 10s
       retries: 5
       start_period: 45s
+
+
+  # ---------------------------------------------------------------------------
+  # JupyterLab — xplt-parser + surrogate-lab notebook environment
+  # ---------------------------------------------------------------------------
+  jupyter:
+    build:
+      context: .
+      dockerfile: notebooks/Dockerfile
+    image: digital-twin-ui:jupyter
+    restart: unless-stopped
+    env_file:
+      - .env.librechat
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    environment:
+      # MLflow tracking server (same network as api/worker)
+      MLFLOW_TRACKING_URI: "http://mlflow:5000"
+      # Surrogate data path inside the Jupyter container
+      SURROGATE_DATA_PATH: "/workspace/data/surrogate"
+      # PYTHONPATH so xplt_core and surrogate-lab src are importable
+      PYTHONPATH: "/workspace/xplt-parser:/workspace/surrogate-lab"
+      # Path inside the container where MANUAL_SIMS_HOST_PATH is mounted.
+      # Change MANUAL_SIMS_HOST_PATH in .env.librechat to point at your results dir.
+      MANUAL_SIMS_PATH: "/workspace/manual_sims"
+    volumes:
+      # xplt-parser source (for live editing and the original notebook)
+      - ./xplt-parser:/workspace/xplt-parser
+      # surrogate-lab source (for live editing and the training notebook)
+      - ./surrogate-lab:/workspace/surrogate-lab
+      # Integration notebooks (full_pipeline, retraining, etc.)
+      - ./notebooks:/workspace/notebooks
+      # Shared data directory — written by Jupyter, read by API
+      - ./data/surrogate:/workspace/data/surrogate
+      # Runs directory — read-only access to simulation .xplt results
+      - ${RUNS_HOST_PATH:-./runs}:/workspace/runs:ro
+      # External / manual simulation results — set MANUAL_SIMS_HOST_PATH in .env
+      # Leave the variable unset or blank to skip this mount.
+      - ${MANUAL_SIMS_HOST_PATH:-/tmp/unused_manual_sims}:/workspace/manual_sims:ro
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    networks:
+      - default
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/api')\""
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 
 # ---------------------------------------------------------------------------

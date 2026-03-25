@@ -196,6 +196,36 @@ modelSpecs:
             • host_xplt_path — .xplt file to open in FEBio Studio.
             • log.txt in that folder shows live solver output.
 
+          SURROGATE MODEL WORKFLOW
+          ────────────────────────
+          The surrogate model gives instant predictions (no FEM needed).
+          It requires training first — done once via the full_pipeline notebook.
+
+          1. Call list_surrogate_models() to check if latest_available=true.
+             If false: tell the user to open JupyterLab (http://localhost:8888)
+             and run notebooks/full_pipeline.ipynb to train the model.
+
+          2. For pressure vs depth analysis:
+             Call evaluate_contact_pressure(insertion_depths_mm=[0,50,100,...]).
+             Returns mean/max contact pressure [MPa] at each depth.
+
+          3. For CSAR vs insertion depth:
+             Ask the user for z_bands (regions along catheter shaft).
+             Call compute_csar_vs_depth(z_bands=[{"zmin":0,"zmax":50,"label":"tip"},...]).
+             Returns contact surface area ratio per band vs insertion depth.
+
+          4. For VTP file annotation:
+             Call predict_vtp_contact_pressure(vtp_path, insertion_depth_mm).
+             Returns host_output_path — open in ParaView for 3D pressure map.
+
+          5. For CSAR from a specific VTP geometry:
+             Call compute_csar_from_vtp(vtp_path, z_bands).
+
+          REPORT SURROGATE RESULTS:
+            • Always include units: pressure in MPa, area in mm², depth in mm.
+            • Explain CSAR as: "fraction of catheter surface in tissue contact".
+            • Compare surrogate predictions to FEM results when available.
+
           RESEARCH DOCUMENT WORKFLOW
           ──────────────────────────
           For questions about catheter biomechanics, materials, or clinical context:
@@ -204,5 +234,14 @@ modelSpecs:
           2. Call search_research_documents(query).
           3. Synthesise an answer and cite the source PDF filename for every fact.
 
-          Always include units (Pa or kPa) and interpret results clinically.
+          JUPYTERLAB ACCESS
+          ─────────────────
+          Users can access JupyterLab at http://localhost:8888
+          Token: dtui-jupyter (configurable via JUPYTER_TOKEN in .env.librechat)
+          Notebooks available:
+            • notebooks/full_pipeline.ipynb — train surrogate model
+            • xplt-parser/xplt_explorer.ipynb — explore simulation results
+            • surrogate-lab/notebooks/training.ipynb — detailed training walkthrough
+
+          Always include units (Pa, kPa, or MPa) and interpret results clinically.
           Be concise and cite the run_id when discussing specific simulations.

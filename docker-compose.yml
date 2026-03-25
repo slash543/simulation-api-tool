@@ -27,6 +27,11 @@ x-app-env: &app-env
   DTUI__CELERY__RESULT_BACKEND: "redis://redis:6379/0"
   # MLflow — write to a shared volume; server reads from same path
   DTUI__MLFLOW__TRACKING_URI: "http://mlflow:5000"
+  MLFLOW_TRACKING_URI: "http://mlflow:5000"
+  # Surrogate model artifacts (bind-mount from host ./data/surrogate/)
+  SURROGATE_DATA_PATH: "/app/surrogate_data"
+  # Host-visible path for surrogate data (shown to users in tool responses)
+  SURROGATE_HOST_PATH: "${SURROGATE_DATA_HOST_PATH:-./data/surrogate}"
 
 x-app-volumes: &app-volumes
   - ./scripts/start-worker.sh:/app/scripts/start-worker.sh:ro
@@ -51,6 +56,9 @@ x-app-volumes: &app-volumes
   - ${FEBIO_XML_PATH:-/opt/febio/bin/febio.xml}:/opt/febio/bin/febio.xml:ro
   # FEBio shared libraries — required by the binary at runtime
   - ${FEBIO_LIB_PATH:-/opt/febio/lib}:/opt/febio/lib:ro
+  # Surrogate data: shared bind-mount between API (inference) and Jupyter (training).
+  # Written by the full_pipeline notebook; read by the API for CSAR / VTP endpoints.
+  - ${SURROGATE_DATA_HOST_PATH:-./data/surrogate}:/app/surrogate_data
 
 services:
 

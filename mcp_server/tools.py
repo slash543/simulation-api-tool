@@ -515,6 +515,288 @@ def tool_list_simulation_jobs() -> str:
         return _err(f"List jobs error: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Surrogate model tools
+# ---------------------------------------------------------------------------
+
+# Host-side path to the surrogate data directory (shown to users)
+SURROGATE_HOST_PATH: str = os.getenv("SURROGATE_HOST_PATH", "./data/surrogate")
+_CONTAINER_SURROGATE_PREFIX = "/app/surrogate_data"
+
+
+def _to_surrogate_host_path(container_path: str) -> str:
+    """Translate a container-internal /app/surrogate_data/... path to a host path."""
+    if container_path.startswith(_CONTAINER_SURROGATE_PREFIX):
+        relative = container_path[len(_CONTAINER_SURROGATE_PREFIX):]
+        return SURROGATE_HOST_PATH.rstrip("/") + relative
+    return _to_host_path(container_path)
+
+
+def tool_list_surrogate_models() -> str:
+    """
+    List trained surrogate models from MLflow and check if the 'latest' model
+    is ready for predictions.
+
+    The surrogate model predicts per-facet contact pressure [MPa] given
+    catheter insertion geometry features (centroid_x/y/z, facet_area, insertion_depth).
+
+    Returns:
+        JSON with models (list of run_id, status, metrics) and latest_available (bool).
+    """
+    try:
+        with _fast_client() as c:
+            r = c.get("/surrogate/models")
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPError as exc:
+        return _err(f"List surrogate models error: {exc}")
+
+
+def tool_evaluate_contact_pressure(
+    insertion_depths_mm: list[float],
+    facets_csv_path: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """
+    Compute average/max contact pressure at given insertion depths using surrogate model.
+
+    Much faster than FEM simulations. The surrogate model must have been trained
+    first (use the full_pipeline notebook in the notebooks/ directory).
+
+    Requires a reference facets CSV at data/surrogate/training/reference_facets.csv
+    (created by the full_pipeline notebook), OR pass facets_csv_path explicitly.
+
+    Args:
+        insertion_depths_mm: List of insertion depths [mm] to evaluate.
+        facets_csv_path: Optional path to reference facets CSV (container path).
+                         Default: data/surrogate/training/reference_facets.csv
+        run_id: MLflow run ID of a specific model. None = use latest trained model.
+
+    Returns:
+        JSON with per-depth mean/max contact pressure [MPa].
+    """
+    # Build a mini-CSV evaluation: we call the /surrogate/csar endpoint with a
+    # single full-surface band and extract pressure statistics
+    # For a quick pressure summary, use CSAR endpoint and report CP stats
+    try:
+        payload: dict[str, Any] = {
+            "insertion_depths_mm": insertion_depths_mm,
+            "z_bands": [{"zmin": -9999, "zmax": 9999, "label": "full_surface"}],
+            "cp_threshold": 0.0,
+        }
+        if facets_csv_path:
+            payload["facets_csv_path"] = facets_csv_path
+        if run_id:
+            payload["run_id"] = run_id
+
+        with _client() as c:
+            r = c.post("/surrogate/csar", json=payload)
+            r.raise_for_status()
+            data = r.json()
+
+        # Extract mean/max cp from the full-surface band
+        band = data.get("bands", {}).get("full_surface", {})
+        result = {
+            "insertion_depths_mm": data.get("insertion_depths_mm", []),
+            "mean_cp_MPa": band.get("mean_cp_MPa", []),
+            "max_cp_MPa": band.get("max_cp_MPa", []),
+            "csar": band.get("csar", []),
+            "n_facets_total": data.get("n_facets_total", 0),
+            "run_id_used": data.get("run_id_used"),
+        }
+        return _ok(result)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 503:
+            return _err(
+                "Surrogate model not available. "
+                "Train a model using the full_pipeline notebook "
+                "(notebooks/full_pipeline.ipynb) first."
+            )
+        if exc.response.status_code == 404:
+            return _err(
+                "Reference facets file not found. "
+                "Run the full_pipeline notebook to generate "
+                "data/surrogate/training/reference_facets.csv first."
+            )
+        return _err(f"Prediction failed ({exc.response.status_code}): {exc.response.text}")
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
+def tool_compute_csar_vs_depth(
+    z_bands: list[dict],
+    insertion_depths_mm: list[float] | None = None,
+    max_depth_mm: float = 300.0,
+    depth_step_mm: float = 5.0,
+    facets_csv_path: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """
+    Compute Contact Surface Area Ratio (CSAR) vs insertion depth using surrogate model.
+
+    CSAR measures what fraction of the catheter's surface area is in contact
+    with tissue at each insertion depth, for each Z-band region.
+
+    Requires a trained surrogate model AND reference_facets.csv.
+    Both are created by running the full_pipeline notebook.
+
+    Args:
+        z_bands: List of Z-axis bands. Each entry: {"zmin": float, "zmax": float, "label": str}.
+                 Example: [{"zmin": 0, "zmax": 50, "label": "distal_tip"}]
+        insertion_depths_mm: Specific depths to evaluate [mm]. If None, uses auto grid.
+        max_depth_mm: Upper bound for auto-generated depth grid (default 300 mm).
+        depth_step_mm: Step size for auto grid (default 5 mm).
+        facets_csv_path: Path to reference facets CSV (container path).
+                         Default: data/surrogate/training/reference_facets.csv
+        run_id: MLflow run ID. None = latest model.
+
+    Returns:
+        JSON with per-band CSAR time series vs insertion depth.
+        Each band has: insertion_depths_mm, csar, contact_area_mm2, n_contact_facets, max_cp_MPa.
+    """
+    try:
+        payload: dict[str, Any] = {
+            "z_bands": z_bands,
+            "max_depth_mm": max_depth_mm,
+            "depth_step_mm": depth_step_mm,
+            "cp_threshold": 0.0,
+        }
+        if insertion_depths_mm:
+            payload["insertion_depths_mm"] = insertion_depths_mm
+        if facets_csv_path:
+            payload["facets_csv_path"] = facets_csv_path
+        if run_id:
+            payload["run_id"] = run_id
+
+        with _client() as c:
+            r = c.post("/surrogate/csar", json=payload)
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 503:
+            return _err(
+                "Surrogate model not available. "
+                "Train a model first using notebooks/full_pipeline.ipynb."
+            )
+        if exc.response.status_code == 404:
+            return _err(
+                "Reference facets file not found. "
+                "Run the full_pipeline notebook to create "
+                "data/surrogate/training/reference_facets.csv."
+            )
+        return _err(f"CSAR failed ({exc.response.status_code}): {exc.response.text}")
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
+def tool_predict_vtp_contact_pressure(
+    vtp_path: str,
+    insertion_depth_mm: float,
+    output_path: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """
+    Predict contact pressure on every facet of a VTP file at a given insertion depth.
+
+    Reads the VTP geometry (facet centroids + areas), runs surrogate inference,
+    and writes a new VTP file with the predicted contact_pressure_MPa field.
+    The output VTP can be opened in ParaView for 3D visualization.
+
+    Args:
+        vtp_path: Container-accessible path to the input VTP file.
+                  Files in data/surrogate/results/ or runs/ are accessible.
+                  Example: /app/surrogate_data/results/my_case_t0000.vtp
+        insertion_depth_mm: Catheter insertion depth [mm] for prediction.
+        output_path: Optional output VTP path. Defaults to input_stem + '_predicted.vtp'.
+        run_id: MLflow run ID. None = latest model.
+
+    Returns:
+        JSON with output_vtp_path, host_output_path, n_faces, insertion_depth_mm.
+    """
+    try:
+        payload: dict[str, Any] = {
+            "vtp_path": vtp_path,
+            "insertion_depth_mm": insertion_depth_mm,
+        }
+        if output_path:
+            payload["output_path"] = output_path
+        if run_id:
+            payload["run_id"] = run_id
+
+        with _client() as c:
+            r = c.post("/surrogate/predict-vtp", json=payload, timeout=120.0)
+            r.raise_for_status()
+            data = r.json()
+
+        # Translate container paths to host paths
+        if data.get("output_vtp_path"):
+            data["host_output_path"] = _to_surrogate_host_path(data["output_vtp_path"])
+
+        return _ok(data)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return _err(f"VTP file not found: {vtp_path}")
+        if exc.response.status_code == 503:
+            return _err("Surrogate model not available. Train a model first.")
+        return _err(f"VTP prediction failed ({exc.response.status_code}): {exc.response.text}")
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
+def tool_compute_csar_from_vtp(
+    vtp_path: str,
+    z_bands: list[dict],
+    insertion_depths_mm: list[float] | None = None,
+    max_depth_mm: float = 300.0,
+    depth_step_mm: float = 5.0,
+    run_id: str | None = None,
+) -> str:
+    """
+    Compute CSAR vs insertion depth using the facet geometry from a VTP file.
+
+    Useful when you have a specific simulation's VTP file and want to compute
+    CSAR for arbitrary insertion depths using the surrogate model — without
+    running additional FEM simulations.
+
+    Args:
+        vtp_path: Container path to the VTP file (geometry source).
+                  Example: /app/runs/run_XXXX/results_vtp/results_t0000.vtp
+        z_bands: Z-axis band definitions (same format as tool_compute_csar_vs_depth).
+        insertion_depths_mm: Specific depths [mm]. If None, uses auto grid.
+        max_depth_mm: Upper bound for auto grid (default 300 mm).
+        depth_step_mm: Auto-grid step (default 5 mm).
+        run_id: MLflow run ID. None = latest model.
+
+    Returns:
+        JSON with per-band CSAR series vs insertion depth.
+    """
+    try:
+        payload: dict[str, Any] = {
+            "vtp_path": vtp_path,
+            "z_bands": z_bands,
+            "max_depth_mm": max_depth_mm,
+            "depth_step_mm": depth_step_mm,
+            "cp_threshold": 0.0,
+        }
+        if insertion_depths_mm:
+            payload["insertion_depths_mm"] = insertion_depths_mm
+        if run_id:
+            payload["run_id"] = run_id
+
+        with _client() as c:
+            r = c.post("/surrogate/csar-from-vtp", json=payload, timeout=120.0)
+            r.raise_for_status()
+            return _ok(r.json())
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return _err(f"VTP file not found: {vtp_path}")
+        if exc.response.status_code == 503:
+            return _err("Surrogate model not available. Train a model first.")
+        return _err(f"CSAR-from-VTP failed ({exc.response.status_code}): {exc.response.text}")
+    except httpx.HTTPError as exc:
+        return _err(f"Request error: {exc}")
+
+
 def tool_preview_doe_speeds(
     n_samples: int = 10,
     speed_min: float = 10.0,

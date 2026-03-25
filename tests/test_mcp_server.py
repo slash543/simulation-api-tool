@@ -381,6 +381,12 @@ class TestMcpServerRegistration:
             "list_research_documents",
             "ingest_research_documents",
             "search_research_documents",
+            # Surrogate model
+            "list_surrogate_models",
+            "evaluate_contact_pressure",
+            "compute_csar_vs_depth",
+            "predict_vtp_contact_pressure",
+            "compute_csar_from_vtp",
         }
         assert tool_names == expected
 

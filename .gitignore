@@ -26,6 +26,18 @@ results/
 *.feb.bak
 *.feb
 
+# Surrogate data — large files generated at runtime
+data/surrogate/training/*
+!data/surrogate/training/.gitkeep
+data/surrogate/models/*
+!data/surrogate/models/.gitkeep
+data/surrogate/results/*
+!data/surrogate/results/.gitkeep
+*.pt
+*.pkl
+combined.csv
+reference_facets.csv
+
 # Research documents — keep the folder, ignore PDF contents
 research_documents/*.pdf
 
