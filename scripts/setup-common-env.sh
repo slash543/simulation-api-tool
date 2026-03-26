@@ -93,7 +93,7 @@ PIP="${VENV_DIR}/bin/pip"
 PYTHON="${VENV_DIR}/bin/python"
 
 # Upgrade pip silently
-"$PIP" install --upgrade pip setuptools wheel -q
+"$PIP" install --upgrade pip "setuptools<82" wheel -q
 
 # ---------------------------------------------------------------------------
 # 3. Install simulation-api-tool dependencies
