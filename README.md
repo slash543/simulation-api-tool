@@ -45,10 +45,15 @@ Drop in FEB files, chat with the agent, submit simulation jobs, train a surrogat
 ### 1. Clone and add your FEB files
 
 ```bash
-git clone <your-repo-url>
+git clone --recurse-submodules <your-repo-url>
 cd simulation-api-tool
 cp /path/to/your_files/*.feb base_configuration/
 ```
+
+> If you already cloned without `--recurse-submodules`, run:
+> ```bash
+> git submodule update --init --recursive
+> ```
 
 FEB files must follow this naming convention:
 

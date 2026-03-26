@@ -56,6 +56,17 @@ fi
 info "openssl: OK"
 
 # ---------------------------------------------------------------------------
+# 0b. Submodule initialisation
+# ---------------------------------------------------------------------------
+section "Initialising git submodules"
+if git submodule update --init --recursive; then
+    info "Submodules ready (surrogate-lab, xplt-parser)"
+else
+    warn "git submodule init failed — surrogate notebooks may not work."
+    warn "Run manually: git submodule update --init --recursive"
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Port conflict check
 # ---------------------------------------------------------------------------
 section "Checking for port conflicts"
