@@ -97,6 +97,7 @@ services:
       --port 5000
       --backend-store-uri /mlruns
       --default-artifact-root /mlruns
+      --serve-artifacts
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
