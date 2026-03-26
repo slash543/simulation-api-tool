@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-# setup-common-env.sh — One-shot environment setup for simulation-api-tool
+# setup-common-env.sh — Python-only environment setup for simulation-api-tool
 #
-# Run this ONCE after cloning the repository.  It creates a single Python
-# virtual environment that supports:
+# NOTE: If you have Docker installed, run ./setup.sh instead — it covers
+# everything in this script plus Docker/FEBio/LibreChat configuration in one go.
+#
+# Use this script only when you need a Python environment without Docker
+# (e.g. a headless compute node, CI, or local notebook-only usage).
+#
+# Creates a single .venv that supports:
 #   • simulation-api-tool  (FastAPI, Celery, MLflow, RAG, etc.)
 #   • xplt-parser          (FEBio .xplt binary parsing, VTP export)
 #   • surrogate-lab        (neural network surrogate training and inference)
@@ -28,6 +33,18 @@ echo "============================================================"
 echo "  Digital Twin UI — Common Environment Setup"
 echo "  Repo root: ${REPO_ROOT}"
 echo "============================================================"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 0. Initialise git submodules (xplt-parser, surrogate-lab)
+# ---------------------------------------------------------------------------
+echo "Initialising git submodules ..."
+if git -C "${REPO_ROOT}" submodule update --init --recursive; then
+    echo "  ✓ Submodules ready (surrogate-lab, xplt-parser)"
+else
+    echo "  WARNING: git submodule init failed."
+    echo "           Run manually: git submodule update --init --recursive"
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -63,7 +80,7 @@ VENV_DIR="${REPO_ROOT}/.venv"
 
 if [ -d "$VENV_DIR" ]; then
     echo "Virtual environment already exists at ${VENV_DIR}"
-    echo "To recreate it, run: rm -rf ${VENV_DIR} && bash scripts/setup-common-env.sh"
+    echo "To recreate it, run: rm -rf ${VENV_DIR} && bash scripts/setup-common-env.sh  (or ./setup.sh)"
     echo ""
 else
     echo "Creating virtual environment at ${VENV_DIR} ..."
