@@ -19,7 +19,9 @@ logs/
 mlruns/
 data/raw/
 data/datasets/
-models/
+# Trained model artifact directories (runtime outputs — not source code)
+data/surrogate/models/
+checkpoints/
 results/
 *.xplt
 *.log
