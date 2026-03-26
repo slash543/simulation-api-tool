@@ -85,7 +85,7 @@ services:
   # MLflow — experiment tracking server
   # ---------------------------------------------------------------------------
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.13.2
+    image: ghcr.io/mlflow/mlflow:v3.1.0
     restart: unless-stopped
     ports:
       - "5000:5000"
