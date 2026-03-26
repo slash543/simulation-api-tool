@@ -1,0 +1,72 @@
+data:
+  source: "data/simulations/"
+  file_pattern: "*.csv"
+  time_to_depth:
+    method: linear
+    scale: 1.0          # mm per time unit
+
+features:
+  # HOW TO ADD A NEW VARIABLE
+  # --------------------------
+  # 1. In xplt-parser/xplt_core.py add a _col_<name>(self) method to
+  #    SimulationCase that returns a flat array of length n_timesteps*n_facets.
+  # 2. Register it in SimulationCase.SURROGATE_COLUMNS with a short description.
+  # 3. Re-export the surrogate CSV from the notebook (cell 17) — the new column
+  #    appears automatically.
+  # 4. Add the column name here (inputs or target) and re-run training.
+  #
+  # To discover what columns a CSV already contains:
+  #   from src.data.loader import list_available_features
+  #   print(list_available_features("path/to/sample_surrogate.csv"))
+  inputs:
+    - centroid_x
+    - centroid_y
+    - centroid_z
+    - facet_area
+    - insertion_depth
+    # Add new xplt-parser columns here, e.g.:
+    # - vector_gap_magnitude
+    # - surface_traction_z
+  target: contact_pressure
+  normalization:
+    method: minmax    # standard | minmax
+
+split:
+  train: 0.70
+  val:   0.15
+  test:  0.15
+  random_seed: 42
+
+model:
+  type: MLP
+  layers: [128, 128, 64]
+  activation: relu      # relu | tanh | elu | gelu
+  dropout: 0.0
+
+training:
+  optimizer: adam
+  lr: 0.001
+  loss: mse
+  epochs: 200
+  batch_size: 256
+  early_stopping:
+    enabled: true
+    patience: 20
+    min_delta: 1.0e-6
+  checkpoint:
+    enabled: true
+    dir: checkpoints/
+    save_best: true
+
+evaluation:
+  metrics: [rmse, mae, r2]
+  kfold:
+    enabled: false
+    n_splits: 5
+
+mlflow:
+  experiment_name: surrogate-lab
+  tracking_uri: mlruns/
+  log_artifacts: true
+  register_model: false
+  model_name: contact_pressure_surrogate

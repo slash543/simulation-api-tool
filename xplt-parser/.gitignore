@@ -1,0 +1,26 @@
+# Virtual environment
+.venv/
+
+# Large simulation files
+*.xplt
+*.feb
+
+# Generated outputs
+*.csv
+*.png
+*.vtp
+*.pvd
+vtp_output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# Claude Code
+CLAUDE.md
+.claude/

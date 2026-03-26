@@ -1,7 +1,0 @@
-[submodule "surrogate-lab"]
-	path = surrogate-lab
-	url = https://github.com/slash543/surrogate-lab.git
-
-[submodule "xplt-parser"]
-	path = xplt-parser
-	url = https://github.com/slash543/xplt-parser.git
