@@ -50,11 +50,31 @@ class SurrogateModelInfo(BaseModel):
     artifact_uri: Optional[str] = None
 
 
+class RegisteredModelVersion(BaseModel):
+    """A single version entry from the MLflow Model Registry."""
+    version: str
+    stage: str
+    run_id: Optional[str] = None
+    status: Optional[str] = None
+
+
+class RegisteredModelInfo(BaseModel):
+    """A registered model and its latest versions from the MLflow registry."""
+    name: str
+    description: str = ""
+    tags: dict[str, str] = {}
+    latest_versions: list[RegisteredModelVersion] = []
+
+
 class ListSurrogateModelsResponse(BaseModel):
     models: list[SurrogateModelInfo]
     latest_available: bool = Field(
         ...,
         description="True if data/surrogate/models/latest/ has all required artifacts.",
+    )
+    registered_models: list[RegisteredModelInfo] = Field(
+        default_factory=list,
+        description="Models registered in the MLflow Model Registry.",
     )
 
 
@@ -78,6 +98,15 @@ class PredictRequest(BaseModel):
     run_id: Optional[str] = Field(
         None,
         description="MLflow run ID to use. If None, loads the 'latest' trained model.",
+    )
+    registered_model_name: Optional[str] = Field(
+        None,
+        description="MLflow registered model name (e.g. 'CatheterCSARSurrogate'). "
+        "If set, loads the latest registered version instead of run_id or local 'latest'.",
+    )
+    model_stage: Optional[str] = Field(
+        None,
+        description="Registry stage to load: 'Production', 'Staging', or None for latest version.",
     )
 
 
@@ -122,6 +151,14 @@ class CSARRequest(BaseModel):
     run_id: Optional[str] = Field(
         None,
         description="MLflow run ID. None = latest trained model.",
+    )
+    registered_model_name: Optional[str] = Field(
+        None,
+        description="MLflow registered model name. Overrides run_id when set.",
+    )
+    model_stage: Optional[str] = Field(
+        None,
+        description="Registry stage: 'Production', 'Staging', or None for latest.",
     )
     cp_threshold: float = Field(
         0.0,
@@ -176,6 +213,14 @@ class PredictVTPRequest(BaseModel):
         None,
         description="MLflow run ID. None = latest trained model.",
     )
+    registered_model_name: Optional[str] = Field(
+        None,
+        description="MLflow registered model name. Overrides run_id when set.",
+    )
+    model_stage: Optional[str] = Field(
+        None,
+        description="Registry stage: 'Production', 'Staging', or None for latest.",
+    )
 
 
 class PredictVTPResponse(BaseModel):
@@ -202,6 +247,11 @@ class CSARFromVTPRequest(BaseModel):
     max_depth_mm: float = 300.0
     depth_step_mm: float = 5.0
     run_id: Optional[str] = None
+    registered_model_name: Optional[str] = Field(
+        None,
+        description="MLflow registered model name. Overrides run_id when set.",
+    )
+    model_stage: Optional[str] = None
     cp_threshold: float = 0.0
 
 
@@ -211,3 +261,148 @@ class CSARFromVTPResponse(BaseModel):
     n_facets: int
     vtp_source: str
     run_id_used: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# CSAR plot from VTP
+# ---------------------------------------------------------------------------
+
+class CSARPlotFromVTPRequest(BaseModel):
+    """Compute CSAR vs insertion depth from a VTP file and generate a plot."""
+
+    vtp_path: str = Field(
+        ...,
+        description="Container path to the VTP file (geometry source).",
+    )
+    z_bands: list[ZBand] = Field(
+        ...,
+        min_length=1,
+        description="Z-axis bands to plot. Each band becomes a separate curve.",
+    )
+    insertion_depths_mm: Optional[list[float]] = Field(
+        None,
+        description="Depth sample points [mm]. None = auto grid.",
+    )
+    max_depth_mm: float = Field(300.0, description="Upper bound for auto depth grid [mm].")
+    depth_step_mm: float = Field(5.0, description="Step for auto depth grid [mm].")
+    run_id: Optional[str] = Field(None, description="MLflow run ID. None = latest model.")
+    registered_model_name: Optional[str] = Field(
+        None,
+        description="MLflow registered model name. Overrides run_id when set.",
+    )
+    model_stage: Optional[str] = Field(
+        None,
+        description="Registry stage: 'Production', 'Staging', or None for latest.",
+    )
+    cp_threshold: float = Field(0.0, description="Contact threshold [MPa].")
+    output_path: Optional[str] = Field(
+        None,
+        description="Where to save the PNG. Defaults to surrogate_data/results/csar_plots/.",
+    )
+    title: Optional[str] = Field(None, description="Optional plot title override.")
+
+
+class CSARPlotFromVTPResponse(BaseModel):
+    plot_path: str = Field(..., description="Container path to the saved PNG file.")
+    host_plot_path: str = Field(..., description="Host-visible path to the PNG file.")
+    plot_png_b64: str = Field(..., description="Base64-encoded PNG for inline display.")
+    insertion_depths_mm: list[float]
+    bands: dict[str, BandCSARSeries]
+    n_facets: int
+    vtp_source: str
+    run_id_used: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Combined contact analysis (CSAR + peak pressure, one call)
+# ---------------------------------------------------------------------------
+
+class AnalyseContactRequest(BaseModel):
+    """
+    One-shot combined analysis: CSAR + peak-pressure vs insertion depth from a VTP.
+
+    Generates a two-panel plot (CSAR per band, peak pressure per band) and
+    returns a concise statistics summary — no knowledge of facets/centroids needed.
+    """
+
+    vtp_path: str = Field(
+        ...,
+        description="Container path to the VTP file (geometry source). "
+        "Files in /app/runs/ or /app/surrogate_data/ are accessible.",
+    )
+    z_bands: list[ZBand] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Axial regions to analyse (Z = catheter depth in mm from tip). "
+            "Z=0 is the distal tip; larger Z values are more proximal. "
+            "Example: [{\"zmin\": 0, \"zmax\": 50, \"label\": \"tip\"}]"
+        ),
+    )
+    insertion_depths_mm: Optional[list[float]] = Field(
+        None,
+        description="Specific insertion depth sample points [mm]. "
+        "None = auto grid from 0 to max_depth_mm.",
+    )
+    max_depth_mm: float = Field(300.0, description="Upper bound for auto depth grid [mm].")
+    depth_step_mm: float = Field(5.0, description="Step size for auto depth grid [mm].")
+    run_id: Optional[str] = Field(None, description="MLflow run ID. None = latest model.")
+    registered_model_name: Optional[str] = Field(
+        None,
+        description="MLflow registered model name. Overrides run_id when set.",
+    )
+    model_stage: Optional[str] = Field(
+        None,
+        description="Registry stage: 'Production', 'Staging', or None for latest.",
+    )
+    cp_threshold: float = Field(0.0, description="Threshold [MPa] for 'in contact'.")
+    output_path: Optional[str] = Field(None, description="Optional output PNG path.")
+    title: Optional[str] = Field(None, description="Optional plot title.")
+
+
+class BandSummary(BaseModel):
+    """Key statistics for a single Z band."""
+
+    label: str
+    zmin_mm: float
+    zmax_mm: float
+    n_total_facets: int
+    total_area_mm2: float
+    peak_csar: Optional[float] = Field(None, description="Maximum CSAR across all depths.")
+    depth_at_peak_csar_mm: Optional[float] = Field(None, description="Depth at peak CSAR.")
+    peak_pressure_MPa: Optional[float] = Field(None, description="Maximum predicted pressure.")
+    depth_at_peak_pressure_mm: Optional[float] = Field(None, description="Depth at peak pressure.")
+    first_contact_depth_mm: Optional[float] = Field(
+        None, description="Shallowest depth with any contact (CSAR > 0)."
+    )
+
+
+class AnalyseContactResponse(BaseModel):
+    plot_path: str = Field(..., description="Container path to the saved PNG file.")
+    host_plot_path: str = Field(..., description="Host-visible path to the PNG file.")
+    plot_png_b64: str = Field(..., description="Base64-encoded PNG for inline display.")
+    insertion_depths_mm: list[float]
+    bands: dict[str, BandCSARSeries]
+    band_summaries: dict[str, BandSummary] = Field(
+        ..., description="Concise per-band statistics (peaks, first-contact depth)."
+    )
+    n_facets: int
+    vtp_source: str
+    run_id_used: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# List VTP files
+# ---------------------------------------------------------------------------
+
+class VTPFileInfo(BaseModel):
+    path: str = Field(..., description="Container path to the VTP file.")
+    host_path: str = Field(..., description="Host-visible path to the VTP file.")
+    size_kb: float
+    stem: str
+
+
+class ListVTPFilesResponse(BaseModel):
+    vtp_files: list[VTPFileInfo]
+    total: int
+    search_dirs: list[str]

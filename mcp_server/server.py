@@ -9,14 +9,17 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from tools import (
+    tool_analyse_catheter_contact,
     tool_cancel_simulation,
     tool_compute_csar_from_vtp,
     tool_compute_csar_vs_depth,
     tool_evaluate_contact_pressure,
+    tool_generate_csar_plot_from_vtp,
     tool_get_doe_status,
     tool_get_task_status,
     tool_health_check,
     tool_ingest_research_documents,
+    tool_list_available_vtps,
     tool_list_catheter_designs,
     tool_list_research_documents,
     tool_list_simulation_jobs,
@@ -35,41 +38,96 @@ from tools import (
 mcp = FastMCP(
     "digital-twin-simulation",
     instructions=(
-        "You are the Digital Twin User Interface simulation assistant.\n\n"
-        "You have two capability groups:\n\n"
-        "═══ GROUP 1: FEM SIMULATIONS ═══\n"
-        "CRITICAL: ALWAYS call list_catheter_designs() FIRST before any simulation.\n"
-        "Never assume which designs or configurations are available.\n"
-        "SPEED: 10–25 mm/s (check speed_range_min/max in list_catheter_designs response).\n"
-        "All current designs have 10 steps; repeat the same value for uniform speed.\n\n"
-        "FEM WORKFLOW:\n"
-        "  1. Call list_catheter_designs() — MANDATORY, every time.\n"
-        "  2. Present available designs and configurations to the user.\n"
-        "  3. Ask the user to choose design, configuration, and speed(s).\n"
-        "  4. Call run_catheter_simulation(design, configuration, speeds_mm_s).\n"
-        "  5. Tell user: host_run_dir and host_xplt_path.\n\n"
-        "NEW .FEB FILES: call refresh_catalogue() to rescan without restarting.\n"
-        "DOE CAMPAIGNS: run_doe_campaign(); poll with get_doe_status().\n"
-        "RAG DOCUMENTS: list → ingest → search_research_documents().\n\n"
-        "═══ GROUP 2: SURROGATE MODEL (instant predictions) ═══\n"
-        "The surrogate model is a neural network trained on FEM results.\n"
-        "It predicts per-facet contact pressure instantly (no FEM needed).\n\n"
-        "FIRST CHECK: Always call list_surrogate_models() to verify the model is\n"
-        "available (latest_available=true) before calling surrogate tools.\n"
-        "If the model is NOT available, tell the user to run the full_pipeline\n"
-        "notebook (notebooks/full_pipeline.ipynb) to train the model.\n\n"
-        "SURROGATE TOOLS:\n"
-        "  list_surrogate_models()          — check model availability + MLflow history\n"
-        "  evaluate_contact_pressure(depths, ...) — mean/max cp at given depths\n"
-        "  compute_csar_vs_depth(z_bands, ...) — CSAR vs insertion depth per Z band\n"
-        "  predict_vtp_contact_pressure(vtp_path, depth, ...) — annotate VTP file\n"
-        "  compute_csar_from_vtp(vtp_path, z_bands, ...) — CSAR using VTP geometry\n\n"
-        "Z BANDS: must specify at least one {'zmin': float, 'zmax': float, 'label': str}.\n"
-        "Example: [{'zmin': 0, 'zmax': 50, 'label': 'distal_tip'}]\n\n"
-        "VTP PATHS: container paths under /app/surrogate_data/ or /app/runs/.\n"
-        "The host_output_path in responses shows where to find the file locally.\n\n"
-        "TO CHECK STATUS: call list_simulation_jobs().\n"
-        "TO CANCEL: get run_id from list_simulation_jobs(), then cancel_simulation().\n"
+        "You are the Urethral Catheter Coverage Profiler — a specialist in\n"
+        "characterising how a catheter's surface contacts the urethral wall as it\n"
+        "is inserted, and how effectively a surface coating is delivered across\n"
+        "each axial region of the catheter.\n\n"
+
+        "═══ PHYSICAL CONTEXT (READ THIS FIRST) ═══\n"
+        "The surrogate model was trained on a quasi-static FEM simulation of\n"
+        "catheter insertion into a hyperelastic urethra. Hyperelastic materials\n"
+        "are RATE-INDEPENDENT: the contact state at a given depth is identical\n"
+        "regardless of insertion speed. Therefore:\n"
+        "  • Insertion DEPTH is the one meaningful variable.\n"
+        "  • Insertion SPEED is irrelevant — never discuss it.\n"
+        "  • The model profiles one specific catheter-urethra geometry pair.\n"
+        "  • Do NOT compare across speeds, conditions, or multiple anatomies\n"
+        "    unless the user provides separate VTP files for each.\n\n"
+
+        "═══ YOUR PRIMARY METRIC: CSAR ═══\n"
+        "CSAR(depth, band) = catheter facets in band with contact pressure > 0\n"
+        "                    ─────────────────────────────────────────────────\n"
+        "                    total catheter facets in that band\n\n"
+        "Z-bands select CATHETER SURFACE FACES by the Z-coordinate of their\n"
+        "centroid (Z=0 = distal tip, increasing toward the handle). The surrogate\n"
+        "predicts contact pressure on catheter faces; CSAR is the fraction of\n"
+        "faces within a band that have cp > 0 at a given insertion depth.\n\n"
+        "  0%%   → no coating delivery (no contact in this catheter region)\n"
+        "  100%% → full coverage of that catheter region\n"
+        "  < 10%%  → no meaningful delivery\n"
+        "  10–30%% → partial — early contact or distal-only\n"
+        "  30–60%% → moderate — typical mid-insertion\n"
+        "  60–80%% → good — effective for most coating types\n"
+        "  > 80%%  → excellent — near-complete wall contact\n\n"
+
+        "═══ THE THREE CLINICAL QUESTIONS ═══\n"
+        "Every analysis must answer these three questions per band:\n"
+        "  1. THRESHOLD  At what depth does coating delivery begin?\n"
+        "                → first_contact_depth_mm\n"
+        "  2. OPTIMUM    At what depth is coverage maximised? Does it plateau?\n"
+        "                → depth_at_peak_csar_mm; note if CSAR flattens before\n"
+        "                   full insertion (plateau = further insertion adds nothing)\n"
+        "  3. REGIONAL   Which catheter region contacts first / most?\n"
+        "                → compare first_contact_depth_mm and peak_csar across bands\n\n"
+
+        "═══ CATHETER Z-BANDS ═══\n"
+        "Z = 0 at the catheter tip (first to enter); increases proximally.\n"
+        "Z-bands are divisions of CATHETER GEOMETRY, not urethra anatomy.\n"
+        "Typical catheter regions:\n"
+        "  distal tip:  zmin=0,   zmax=50,  label='distal_tip'\n"
+        "  mid-shaft:   zmin=50,  zmax=150, label='mid_shaft'\n"
+        "  proximal:    zmin=150, zmax=300, label='proximal'\n"
+        "DEFAULT (no regions specified):\n"
+        "  [{\"zmin\": 0, \"zmax\": 9999, \"label\": \"whole_catheter\"}]\n"
+        "Use custom mm values exactly as the user provides them.\n\n"
+
+        "═══ DEPTH GRID ═══\n"
+        "Always use depth_step_mm=2 (not the default 5).\n"
+        "Depth is the only axis — finer steps capture the exact contact onset\n"
+        "and plateau shape. Use depth_step_mm=1 for high-resolution curves.\n\n"
+
+        "═══ WORKFLOW ═══\n"
+        "STEP 0 — list_surrogate_models()\n"
+        "  latest_available=true  → proceed\n"
+        "  registered_models non-empty → pass registered_model_name=<name> to all calls\n"
+        "  neither → ask user to run full_pipeline.ipynb\n"
+        "STEP 1 — find VTP: list_available_vtps() or use user-provided path\n"
+        "STEP 2 — clarify bands: default whole_catheter; use user-specified mm ranges\n"
+        "STEP 3 — analyse_catheter_contact(vtp_path, z_bands,\n"
+        "                                  depth_step_mm=2,\n"
+        "                                  registered_model_name=<if needed>)\n"
+        "STEP 4 — answer the three clinical questions per zone:\n"
+        "  'Coating first contacts the <band> region at <depth> mm insertion.'\n"
+        "  'Maximum coverage in <band> is <%%> reached at <depth> mm.'\n"
+        "  Flag bands where peak_csar < 30%% as under-covered.\n"
+        "  Note if the CSAR curve plateaus (further insertion gains nothing).\n"
+        "  Tell user: Open <host_plot_path> to view the coverage profile.\n"
+        "STEP 5 (optional) — 3-D snapshot:\n"
+        "  predict_vtp_contact_pressure(vtp_path, depth) → open in ParaView\n\n"
+
+        "═══ TOOLS ═══\n"
+        "  list_surrogate_models()           — ★ ALWAYS FIRST\n"
+        "  list_available_vtps()             — discover VTP files\n"
+        "  analyse_catheter_contact(...)     — ★ PRIMARY: depth profile + plot\n"
+        "  generate_csar_plot_from_vtp(...)  — CSAR-only plot\n"
+        "  compute_csar_from_vtp(...)        — raw CSAR data (no plot)\n"
+        "  evaluate_contact_pressure(...)    — mean/max pressure summary\n"
+        "  predict_vtp_contact_pressure(...) — annotated VTP for ParaView\n\n"
+        "  FEM SIMULATIONS: list_catheter_designs() → run_catheter_simulation()\n"
+        "  RESEARCH DOCS: list_research_documents() → search_research_documents()\n\n"
+
+        "Always state CSAR as a percentage. Never mention speed.\n"
+        "VTP paths: container paths under /app/surrogate_data/ or /app/runs/.\n"
     ),
 )
 
@@ -329,13 +387,17 @@ def search_research_documents(query: str, n_results: int = 5) -> str:
 @mcp.tool()
 def list_surrogate_models() -> str:
     """
-    List trained surrogate models from MLflow and check if the 'latest' model
-    is available for predictions.
+    List trained surrogate models from MLflow.
 
-    ALWAYS call this first before using any surrogate tool, to verify that
-    latest_available=true. If false, ask the user to run the training notebook.
+    ★ ALWAYS call this FIRST before any surrogate/CSAR tool.
 
-    Returns: models (list of run_id, metrics), latest_available (bool).
+    Returns:
+      - latest_available: True if a local model is ready
+      - registered_models: models from the MLflow Registry (may be trained on another VM)
+      - recent_runs: last 5 training run IDs and metrics
+
+    If registered_models is non-empty, pass registered_model_name=<name> to all
+    prediction calls so the system downloads and uses that cross-VM model.
     """
     return tool_list_surrogate_models()
 
@@ -345,22 +407,22 @@ def evaluate_contact_pressure(
     insertion_depths_mm: list[float],
     facets_csv_path: str | None = None,
     run_id: str | None = None,
+    registered_model_name: str | None = None,
 ) -> str:
     """
-    Compute mean/max contact pressure vs insertion depth using the surrogate model.
-
-    Orders of magnitude faster than FEM. Requires a trained surrogate model.
+    Compute mean/max contact pressure (MPa) at given insertion depths.
 
     Args:
-        insertion_depths_mm: List of insertion depths [mm] to evaluate.
-                             Example: [0, 50, 100, 150, 200, 250, 300]
-        facets_csv_path: Container path to reference facets CSV.
-                         Default: uses data/surrogate/training/reference_facets.csv
-        run_id: MLflow run ID. None = latest trained model.
+        insertion_depths_mm: Depths [mm] to evaluate.  Example: [0,50,100,200,300]
+        facets_csv_path: Container path to reference facets CSV (optional).
+        run_id: Specific MLflow run. None = latest model.
+        registered_model_name: Registry model name for cross-VM loading.
 
     Returns: insertion_depths_mm, mean_cp_MPa, max_cp_MPa, csar per depth.
     """
-    return tool_evaluate_contact_pressure(insertion_depths_mm, facets_csv_path, run_id)
+    return tool_evaluate_contact_pressure(
+        insertion_depths_mm, facets_csv_path, run_id, registered_model_name
+    )
 
 
 @mcp.tool()
@@ -371,26 +433,27 @@ def compute_csar_vs_depth(
     depth_step_mm: float = 5.0,
     facets_csv_path: str | None = None,
     run_id: str | None = None,
+    registered_model_name: str | None = None,
 ) -> str:
     """
-    Compute Contact Surface Area Ratio (CSAR) vs insertion depth for given Z bands.
+    Compute CSAR vs insertion depth for given Z bands (no plot, raw data).
 
-    CSAR = fraction of catheter surface area in contact with tissue at each depth.
-    Results are broken down by Z-band (region along catheter shaft).
+    CSAR = fraction of catheter surface in contact with tissue at each depth.
 
     Args:
-        z_bands: List of Z-band dicts: [{"zmin": 0.0, "zmax": 50.0, "label": "tip"}]
-                 Specify one or more bands to analyse simultaneously.
-        insertion_depths_mm: Specific depths [mm] to evaluate. None = auto grid.
-        max_depth_mm: Upper limit for auto-generated depth grid (default 300).
-        depth_step_mm: Step size for auto grid (default 5 mm).
-        facets_csv_path: Container path to facets CSV. Default: reference_facets.csv.
+        z_bands: [{"zmin": 0.0, "zmax": 50.0, "label": "tip"}, ...]
+        insertion_depths_mm: Specific depths [mm]. None = auto grid.
+        max_depth_mm: Auto-grid upper bound (default 300).
+        depth_step_mm: Auto-grid step (default 5 mm).
+        facets_csv_path: Container path to facets CSV (optional).
         run_id: MLflow run ID. None = latest model.
+        registered_model_name: Registry model name for cross-VM loading.
 
     Returns: per-band CSAR series with csar, contact_area_mm2, n_contact_facets.
     """
     return tool_compute_csar_vs_depth(
-        z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm, facets_csv_path, run_id
+        z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm,
+        facets_csv_path, run_id, registered_model_name
     )
 
 
@@ -400,25 +463,26 @@ def predict_vtp_contact_pressure(
     insertion_depth_mm: float,
     output_path: str | None = None,
     run_id: str | None = None,
+    registered_model_name: str | None = None,
 ) -> str:
     """
-    Predict contact pressure on each facet of a VTP mesh and save a new VTP.
+    Annotate a VTP mesh with predicted contact pressures at a given insertion depth.
 
-    Reads facet geometry from the input VTP, runs surrogate inference at the
-    given insertion depth, and writes a new VTP with contact_pressure_MPa values.
-    The output file can be opened in ParaView for 3D pressure visualization.
+    Outputs a new VTP file with contact_pressure_MPa cell data — open in ParaView
+    for a 3D colour-mapped view of which areas are under pressure.
 
     Args:
         vtp_path: Container path to input VTP file.
-                  Example: /app/surrogate_data/results/case_t0000.vtp
-                  Or from a run: /app/runs/run_XXXX/results_vtp/results_t0000.vtp
-        insertion_depth_mm: Catheter insertion depth [mm] for prediction.
-        output_path: Optional output path. Defaults to input_stem + '_predicted.vtp'.
+        insertion_depth_mm: Catheter insertion depth [mm].
+        output_path: Optional output path (defaults to input_stem + '_predicted.vtp').
         run_id: MLflow run ID. None = latest model.
+        registered_model_name: Registry model name for cross-VM loading.
 
-    Returns: output_vtp_path, host_output_path (to open locally), n_faces.
+    Returns: output_vtp_path, host_output_path, n_faces.
     """
-    return tool_predict_vtp_contact_pressure(vtp_path, insertion_depth_mm, output_path, run_id)
+    return tool_predict_vtp_contact_pressure(
+        vtp_path, insertion_depth_mm, output_path, run_id, registered_model_name
+    )
 
 
 @mcp.tool()
@@ -429,26 +493,124 @@ def compute_csar_from_vtp(
     max_depth_mm: float = 300.0,
     depth_step_mm: float = 5.0,
     run_id: str | None = None,
+    registered_model_name: str | None = None,
 ) -> str:
     """
-    Compute CSAR vs insertion depth using geometry from a specific VTP file.
-
-    Use this when you have a VTP file from a particular simulation and want
-    to evaluate CSAR at different insertion depths without re-running FEM.
+    Compute CSAR vs insertion depth from a VTP file (raw data, no plot).
 
     Args:
-        vtp_path: Container path to VTP file (geometry source).
-                  Example: /app/runs/run_XXXX/results_vtp/results_t0000.vtp
-        z_bands: Z-band definitions: [{"zmin": 0.0, "zmax": 50.0, "label": "tip"}]
-        insertion_depths_mm: Depths to evaluate. None = auto grid.
-        max_depth_mm: Upper limit for auto grid (default 300 mm).
-        depth_step_mm: Step size for auto grid (default 5 mm).
+        vtp_path: Container path to VTP file.
+        z_bands: [{"zmin": 0.0, "zmax": 50.0, "label": "tip"}, ...]
+        insertion_depths_mm: Specific depths [mm]. None = auto grid.
+        max_depth_mm: Auto-grid upper bound (default 300 mm).
+        depth_step_mm: Auto-grid step (default 5 mm).
         run_id: MLflow run ID. None = latest model.
+        registered_model_name: Registry model name for cross-VM loading.
 
     Returns: per-band CSAR series vs insertion depth.
     """
     return tool_compute_csar_from_vtp(
-        vtp_path, z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm, run_id
+        vtp_path, z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm,
+        run_id, registered_model_name
+    )
+
+
+@mcp.tool()
+def list_available_vtps(max_files: int = 30) -> str:
+    """
+    List VTP files available in runs/ and surrogate_data/ directories.
+
+    Call this when the user doesn't know the VTP path, or before calling
+    analyse_catheter_contact().
+
+    Returns: list of VTP files with host_path, stem, size_kb (newest first).
+    """
+    return tool_list_available_vtps(max_files)
+
+
+@mcp.tool()
+def analyse_catheter_contact(
+    vtp_path: str,
+    z_bands: list[dict],
+    insertion_depths_mm: list[float] | None = None,
+    max_depth_mm: float = 300.0,
+    depth_step_mm: float = 5.0,
+    run_id: str | None = None,
+    registered_model_name: str | None = None,
+    title: str | None = None,
+) -> str:
+    """
+    ★ PRIMARY COATING COVERAGE ANALYSIS TOOL.
+
+    Generates a two-panel plot:
+      TOP:    CSAR (coating coverage fraction) vs insertion depth per Z band
+      BOTTOM: Peak contact pressure [MPa] vs insertion depth per Z band
+
+    No mesh knowledge needed — just specify which Z regions you care about.
+    DEFAULT: If user doesn't specify bands, use whole catheter:
+             [{"zmin": 0, "zmax": 9999, "label": "whole_catheter"}]
+
+    Args:
+        vtp_path: Container path to the VTP file (use list_available_vtps() to find).
+        z_bands: Axial catheter regions. Z=0 is the distal tip (mm from tip).
+                 Default whole-catheter: [{"zmin": 0, "zmax": 9999, "label": "whole_catheter"}]
+                 3-zone example:
+                   [{"zmin":   0, "zmax":  50, "label": "distal_tip"},
+                    {"zmin":  50, "zmax": 150, "label": "mid_shaft"},
+                    {"zmin": 150, "zmax": 300, "label": "proximal"}]
+        insertion_depths_mm: Depths [mm] to evaluate. None = auto grid (recommended).
+        max_depth_mm: Auto-grid upper bound (default 300 mm).
+        depth_step_mm: Auto-grid resolution (default 5 mm).
+        run_id: MLflow run ID. None = latest model.
+        registered_model_name: Registry model name for cross-VM loading.
+                                Get from list_surrogate_models() → registered_models[].name
+        title: Optional plot title.
+
+    Returns:
+        host_plot_path: Open this PNG to view the coverage plots.
+        band_summaries: peak_csar, depth_at_peak_csar_mm, peak_pressure_MPa,
+                        first_contact_depth_mm per band.
+    """
+    return tool_analyse_catheter_contact(
+        vtp_path, z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm,
+        run_id, registered_model_name, title
+    )
+
+
+@mcp.tool()
+def generate_csar_plot_from_vtp(
+    vtp_path: str,
+    z_bands: list[dict],
+    insertion_depths_mm: list[float] | None = None,
+    max_depth_mm: float = 300.0,
+    depth_step_mm: float = 5.0,
+    run_id: str | None = None,
+    registered_model_name: str | None = None,
+    title: str | None = None,
+    output_path: str | None = None,
+) -> str:
+    """
+    Compute CSAR vs insertion depth from a VTP file and generate a CSAR-only PNG plot.
+
+    Use this for a CSAR curve plot without the pressure panel.
+    For the full combined plot (CSAR + pressure), use analyse_catheter_contact().
+
+    Args:
+        vtp_path: Container path to the VTP file.
+        z_bands: Z-band definitions. Each becomes a separate curve in the plot.
+        insertion_depths_mm: Specific depths [mm] to evaluate. None = auto grid.
+        max_depth_mm: Auto-grid upper bound (default 300 mm).
+        depth_step_mm: Auto-grid step size (default 5 mm).
+        run_id: MLflow run ID. None = latest model.
+        registered_model_name: Registry model name for cross-VM loading.
+        title: Optional plot title.
+        output_path: Optional container path for the PNG output.
+
+    Returns: host_plot_path (open this PNG), bands_summary with peak CSAR values.
+    """
+    return tool_generate_csar_plot_from_vtp(
+        vtp_path, z_bands, insertion_depths_mm, max_depth_mm, depth_step_mm,
+        run_id, registered_model_name, title, output_path
     )
 
 

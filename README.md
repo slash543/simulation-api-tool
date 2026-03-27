@@ -1,8 +1,12 @@
 # Digital Twin UI
 
-An integrated platform for catheter insertion FEM simulations (FEBio) combined with a surrogate neural-network model for fast contact-pressure prediction — all accessible through a conversational AI interface.
+An integrated platform for catheter insertion FEM simulations (FEBio) combined with a surrogate neural-network model for fast contact-pressure and coating coverage prediction — all accessible through a conversational AI interface.
 
-Drop in FEB files, chat with the agent, submit simulation jobs, train a surrogate model from results, and query contact-pressure and CSAR profiles — no scripting required.
+Drop in FEB files, chat with the agent, submit simulation jobs, train a surrogate model from results, and query contact-pressure and CSAR (coating coverage) profiles — no scripting required.
+
+**Two specialist agents are included:**
+- **Simulation Assistant** — runs FEM jobs, manages results, runs DOE campaigns
+- **Coating Coverage Analyst** — CSAR analysis, z-band coverage, cross-VM registry model loading
 
 ---
 
@@ -17,13 +21,15 @@ Drop in FEB files, chat with the agent, submit simulation jobs, train a surrogat
 | **Job management** | List running/completed/cancelled jobs, get result file paths, cancel a specific simulation |
 | **DOE campaigns** | Latin-Hypercube or random speed sweeps over many designs, tracked in MLflow |
 | **Surrogate model inference** | Predict contact pressure from facet geometry without running FEBio — instant results |
-| **CSAR vs insertion depth** | Compute Contact Surface Area Ratio curves for user-defined axial bands using the surrogate model |
+| **CSAR — coating coverage** | Compute Contact Surface Area Ratio curves for user-defined axial Z-bands; default covers whole catheter |
+| **CSAR plot generation** | Two-panel PNG output: CSAR (%) and peak contact pressure vs insertion depth per Z-band |
 | **VTP annotation** | Upload a VTP file; get back a new VTP with per-facet contact pressure predicted by the surrogate |
+| **Cross-VM model registry** | Register a model in MLflow from any VM; all agents pick it up automatically via `registered_model_name` |
 | **JupyterLab training environment** | Full training pipeline in `notebooks/full_pipeline.ipynb`; retrain with new data using `notebooks/retraining.ipynb` |
 | **ML pressure prediction (DOE)** | Classic PyTorch surrogate trained on DOE speed sweeps for pressure prediction |
 | **Research document RAG** | Index PDFs from `research_documents/` and query them semantically from the same chat interface |
 | **REST API** | All capabilities exposed as documented FastAPI endpoints at `/api/v1/` |
-| **Portable** | Clone on any Azure VM, add FEB files, run `setup.sh`, and the full stack is ready |
+| **Portable** | Clone on any VM, add FEB files, run `setup.sh`, and the full stack is ready |
 
 ---
 
@@ -118,30 +124,76 @@ docker compose -f docker-compose.librechat.yml ps
 
 Open **http://localhost:3080** and click **Sign up**. Use any email and password.
 
-### 5. Create the Simulation Assistant agent
+### 5. Create the agents
 
-```bash
-bash scripts/create-agent.sh
-```
-
-This creates (or updates) the "Simulation Assistant" agent with the correct system prompt and all MCP tools. Re-run any time after pulling new code.
-
-**To skip the credential prompt**, add your account to `.env.librechat`:
+**To skip the credential prompt**, add your account to `.env.librechat` first:
 
 ```ini
 LIBRECHAT_ADMIN_EMAIL=you@example.com
 LIBRECHAT_ADMIN_PASSWORD=yourpassword
 ```
 
-> **Do not create the agent manually via the Agent Builder UI.** The script is the only way to attach all MCP tools correctly.
+**Simulation Assistant** (FEM jobs, DOE, research documents):
+
+```bash
+bash scripts/create-agent.sh
+```
+
+**Coating Coverage Analyst** (CSAR analysis, cross-VM model loading):
+
+```bash
+python scripts/setup-csar-agent.py \
+  --url http://localhost:3080 \
+  --username you@example.com \
+  --password yourpassword
+```
+
+Both scripts create or update the respective agent and are safe to re-run after pulling new code.
+
+> **Do not create agents manually via the Agent Builder UI.** The scripts are the only way to attach all MCP tools correctly.
 
 ### 6. Start chatting
 
-Open **http://localhost:3080 → Agents → Simulation Assistant**
+- **http://localhost:3080 → Agents → Simulation Assistant** — for running FEM simulations
+- **http://localhost:3080 → Agents → Coating Coverage Analyst** — for CSAR / coating coverage analysis
 
 ---
 
-## Using the Agent
+## Using the Agents
+
+### Coating Coverage Analyst — CSAR analysis
+
+> Full documentation: [docs/csar-agent.md](docs/csar-agent.md)
+
+The Coating Coverage Analyst specialises in **CSAR (Contact Surface Area Ratio)** — the fraction of the catheter's surface that is in contact with the vessel wall at a given insertion depth. This is the key metric for evaluating how effectively a coating (drug-eluting, hydrophilic, antimicrobial) will be delivered.
+
+```
+CSAR = faces with contact pressure > 0
+       ────────────────────────────────
+       total catheter surface faces
+```
+
+**Example conversation:**
+
+```
+You:   What is the coating coverage for my latest simulation?
+Agent: Finds VTP file, runs analysis → returns coverage %, depth at peak,
+       first-contact depth, and a 2-panel PNG plot.
+
+You:   Compare tip (0–50 mm) and mid-shaft (50–150 mm) coverage separately.
+Agent: Runs multi-band analysis, reports each region independently.
+
+You:   Show me the 3D pressure map at 120 mm insertion.
+Agent: Generates an annotated VTP → open in ParaView for heat-map view.
+```
+
+**Z-band analysis:** Specify axial regions (Z = 0 at the tip). If you don't specify, the agent analyses the whole catheter by default.
+
+**Cross-VM model loading:** If the surrogate model was trained on another VM and registered in MLflow, the agent picks it up automatically — no manual file copying needed.
+
+---
+
+### Simulation Assistant — FEM jobs
 
 ### Run a simulation
 
@@ -167,27 +219,31 @@ You:   Cancel the ball tip simulation
 Agent: Calls cancel_simulation() — takes effect within ~1 second
 ```
 
-### Surrogate model — evaluate contact pressure
+### Surrogate model — evaluate contact pressure and CSAR
 
-Before using the surrogate tools, a model must be trained. See [Training the surrogate model](#training-the-surrogate-model) below.
+Before using the surrogate tools, a model must be trained. See [Training the surrogate model](#training-the-surrogate-model) below, or use a model from the MLflow registry trained on another VM.
 
 ```
 You:   Check if the surrogate model is available
-Agent: Calls list_surrogate_models() → shows latest_available: true/false
+Agent: Calls list_surrogate_models() → shows latest_available, registered_models
 
-You:   What is the contact pressure at insertion depths 50, 100, and 150 mm?
-Agent: Calls evaluate_contact_pressure([50, 100, 150]) → returns mean/max CP per depth
+You:   What is the coating coverage for my latest simulation?
+Agent: Calls analyse_catheter_contact(vtp_path, z_bands=[whole_catheter])
+       → 2-panel PNG (CSAR % + pressure vs depth) + peak coverage statistics
 
-You:   Compute CSAR vs depth for the tip region (z = 0 to 30 mm)
-Agent: Calls compute_csar_vs_depth(z_bands=[{zmin:0, zmax:30, label:"tip"}]) → CSAR curve
+You:   Compare tip and mid-shaft coverage
+Agent: Calls analyse_catheter_contact with two z_bands
+       → separate curves per region in the same plot
 
-You:   Annotate /app/surrogate_data/results/geom.vtp at 100 mm insertion depth
+You:   What is the contact pressure at 50, 100, 150 mm?
+Agent: Calls evaluate_contact_pressure([50, 100, 150]) → mean/max CP per depth
+
+You:   Annotate the VTP at 100 mm insertion
 Agent: Calls predict_vtp_contact_pressure(vtp_path=..., insertion_depth_mm=100)
-       → saves a new VTP file with per-facet contact pressure; returns the host path
-
-You:   Compute CSAR from that VTP file for tip and body zones
-Agent: Calls compute_csar_from_vtp(vtp_path=..., z_bands=[{zmin:0,zmax:30,...}, {zmin:30,zmax:80,...}])
+       → saves annotated VTP for ParaView; returns host path
 ```
+
+> For full CSAR documentation including Z-band format, cross-VM registry loading, and API examples, see [docs/csar-agent.md](docs/csar-agent.md).
 
 ### Research document Q&A
 
@@ -240,6 +296,16 @@ JUPYTER_TOKEN=your-secure-token
    - Trains the MLP model using **surrogate-lab**, tracked in MLflow
    - Copies artifacts to `data/surrogate/models/latest/`
 5. Tell the agent: *"Check if the surrogate model is available"* — it will confirm `latest_available: true`
+
+**Optional — register the model for cross-VM use:**
+
+```python
+import mlflow
+mlflow.set_tracking_uri("http://localhost:5000")
+mlflow.register_model(f"runs:/{run_id}/.", "CatheterCSARSurrogate")
+```
+
+Once registered, any VM pointing at the same MLflow server can load this model via `registered_model_name="CatheterCSARSurrogate"` — no file copying needed. See [docs/csar-agent.md](docs/csar-agent.md) for the full cross-VM workflow.
 
 ### Retraining with new data
 
@@ -344,15 +410,20 @@ Interactive docs at **http://localhost:8000/docs**
 | `GET` | `/api/v1/doe/{task_id}` | Poll DOE status |
 | `POST` | `/api/v1/doe/preview-speeds` | Preview DOE speed arrays |
 
-### Surrogate Model
+### Surrogate Model & CSAR
+
+All `POST` endpoints accept optional `registered_model_name` and `model_stage` fields for cross-VM registry loading.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/v1/surrogate/models` | List MLflow runs; check if latest model is deployed |
-| `POST` | `/api/v1/surrogate/predict` | Predict contact pressure from inline facet list |
-| `POST` | `/api/v1/surrogate/csar` | Compute CSAR vs insertion depth (uses reference_facets.csv) |
-| `POST` | `/api/v1/surrogate/predict-vtp` | Annotate a VTP file with predicted contact pressure |
-| `POST` | `/api/v1/surrogate/csar-from-vtp` | Compute CSAR vs insertion depth from VTP geometry |
+| `GET` | `/api/v1/surrogate/models` | List MLflow runs, registered models, and local availability |
+| `GET` | `/api/v1/surrogate/list-vtps` | Discover VTP files in `runs/` and `surrogate_data/` |
+| `POST` | `/api/v1/surrogate/analyse-from-vtp` | **Primary.** 2-panel CSAR + pressure plot with band summaries |
+| `POST` | `/api/v1/surrogate/csar-plot-from-vtp` | CSAR-only plot (PNG) from VTP geometry |
+| `POST` | `/api/v1/surrogate/csar-from-vtp` | CSAR data from VTP geometry (no plot) |
+| `POST` | `/api/v1/surrogate/csar` | CSAR from reference_facets.csv (no VTP required) |
+| `POST` | `/api/v1/surrogate/predict-vtp` | Annotate a VTP file with predicted per-facet contact pressure |
+| `POST` | `/api/v1/surrogate/predict` | Batch contact pressure prediction from inline facet list |
 
 ### ML (DOE surrogate)
 
@@ -429,6 +500,10 @@ User  ──►  LibreChat UI  (port 3080)
                 │  MCP tools via SSE
                 ▼
           MCP Server  (port 8001)
+          ┌──────────────────────────┐
+          │ Simulation Assistant     │  ← FEM jobs, DOE, research docs
+          │ Coating Coverage Analyst │  ← CSAR, z-bands, registry models
+          └──────────────────────────┘
                 │
                 │  HTTP  /api/v1/
                 ▼
@@ -437,23 +512,25 @@ User  ──►  LibreChat UI  (port 3080)
        ┌────────┼────────────┬──────────────┬───────────────┐
        ▼        ▼            ▼              ▼               ▼
   Celery     SQLite       MLflow        ChromaDB      Surrogate
-  Worker    job store   (port 5000)   (RAG index)    Model files
-  (FEBio)                                           models/latest/
-       │
-       ▼
-  base_configuration/*.feb  →  runs/run_*/input.xplt
-                                        │
-                                        ▼
-                               JupyterLab (port 8888)
-                               full_pipeline.ipynb
-                               retraining.ipynb
+  Worker    job store   (port 5000)   (RAG index)   Predictor
+  (FEBio)               Registry                    (SurrogatePredictor)
+       │                    │                              │
+       ▼                    ▼                    ┌─────────┴──────────┐
+  runs/run_*/          registered             local latest/    cross-VM registry
+  input.xplt           models                data/surrogate/  models:/Name/stage
+                          │
+                          ▼
+                  JupyterLab (port 8888)
+                  full_pipeline.ipynb
+                  retraining.ipynb
 ```
 
 - **LibreChat** — chat frontend; routes tool calls through the MCP SSE server
-- **MCP Server** — thin HTTP bridge; translates LLM tool calls to FastAPI requests
+- **MCP Server** — thin HTTP bridge; exposes two agent personalities via the same SSE endpoint
 - **Simulation API** — FastAPI; loads catheter catalogue at startup, validates requests, enqueues Celery tasks
-- **Celery Worker** — runs FEBio subprocesses; polls for cancellation every ~1 second; auto-tunes thread count
-- **MLflow** — experiment tracking for DOE campaigns and surrogate training runs
+- **Celery Worker** — runs FEBio subprocesses; polls for cancellation every ~1 second
+- **MLflow** — experiment tracking + **Model Registry** for cross-VM surrogate model sharing
+- **SurrogatePredictor** — loads from local `latest/`, specific `run_id`, or MLflow registry by name
 - **ChromaDB** — local vector store for research document semantic search
 - **JupyterLab** — interactive training environment; bind-mounted access to xplt-parser, surrogate-lab, runs/, and data/surrogate/
 
@@ -461,7 +538,7 @@ User  ──►  LibreChat UI  (port 3080)
 
 ## Portability — Using on a New VM
 
-The agent definition lives in LibreChat's MongoDB (not in git). On every fresh machine:
+Agent definitions live in LibreChat's MongoDB (not in git). On every fresh machine:
 
 ```bash
 # 1. Clone and add FEB files
@@ -475,20 +552,30 @@ cp /path/to/*.feb base_configuration/
 echo "LIBRECHAT_ADMIN_EMAIL=you@example.com" >> .env.librechat
 echo "LIBRECHAT_ADMIN_PASSWORD=yourpassword" >> .env.librechat
 
-# 4. Start the stack
+# 4. (Optional) auto-load a registry model trained on another VM
+echo "SURROGATE_REGISTRY_MODEL_NAME=CatheterCSARSurrogate" >> .env
+
+# 5. Start the stack
 docker compose -f docker-compose.librechat.yml up --build -d
 
-# 5. Wait for Ollama model download (first run only)
+# 6. Wait for Ollama model download (first run only)
 docker compose -f docker-compose.librechat.yml logs -f ollama-init
 
-# 6. Register account at http://localhost:3080, then create the agent
+# 7. Register account at http://localhost:3080, then create both agents
 bash scripts/create-agent.sh
+python scripts/setup-csar-agent.py \
+  --url http://localhost:3080 \
+  --username you@example.com \
+  --password yourpassword
 
-# 7. Chat at http://localhost:3080 → Agents → Simulation Assistant
-# 8. Train the surrogate model at http://localhost:8888?token=dtui-jupyter
+# 8. Simulation Assistant: http://localhost:3080 → Agents → Simulation Assistant
+# 9. Coverage analysis:   http://localhost:3080 → Agents → Coating Coverage Analyst
+# 10. Train surrogate:    http://localhost:8888?token=dtui-jupyter
 ```
 
-`create-agent.sh` finds and updates an existing "Simulation Assistant" agent rather than creating duplicates — safe to run multiple times.
+Both setup scripts find and update existing agents rather than creating duplicates — safe to run multiple times.
+
+**Using a model trained on another VM:** if a model has been registered in the shared MLflow instance (`mlflow.register_model(...)`), set `SURROGATE_REGISTRY_MODEL_NAME` in `.env` before starting the stack. The Coating Coverage Analyst will automatically use it without requiring local training.
 
 ---
 
@@ -522,7 +609,23 @@ docker compose -f docker-compose.librechat.yml restart worker
 ```
 
 **Surrogate model not available — `latest_available: false`**
-> Train the model first: open `http://localhost:8888?token=dtui-jupyter` and run `notebooks/full_pipeline.ipynb`.
+
+Option A — train locally: open `http://localhost:8888?token=dtui-jupyter` and run `notebooks/full_pipeline.ipynb`.
+
+Option B — use a registry model from another VM:
+```bash
+echo "SURROGATE_REGISTRY_MODEL_NAME=CatheterCSARSurrogate" >> .env
+docker compose -f docker-compose.librechat.yml restart api
+```
+See [docs/csar-agent.md](docs/csar-agent.md) for the full registry workflow.
+
+**Coating Coverage Analyst agent missing**
+```bash
+python scripts/setup-csar-agent.py \
+  --url http://localhost:3080 \
+  --username you@example.com \
+  --password yourpassword
+```
 
 **New FEB file not visible after dropping it in**
 ```

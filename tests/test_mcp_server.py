@@ -387,6 +387,9 @@ class TestMcpServerRegistration:
             "compute_csar_vs_depth",
             "predict_vtp_contact_pressure",
             "compute_csar_from_vtp",
+            "generate_csar_plot_from_vtp",
+            "analyse_catheter_contact",
+            "list_available_vtps",
         }
         assert tool_names == expected
 

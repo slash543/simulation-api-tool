@@ -274,10 +274,119 @@ class SurrogatePredictor:
         logger.info("Downloaded artifacts for run %s to %s", run_id, target_dir)
         return cls(target_dir)
 
+    @classmethod
+    def load_from_registry(
+        cls,
+        model_name: str,
+        stage: str | None = None,
+        tracking_uri: str | None = None,
+        target_dir: Path | None = None,
+    ) -> "SurrogatePredictor":
+        """
+        Load the latest registered model version from the MLflow Model Registry.
+
+        Parameters
+        ----------
+        model_name:
+            Registered model name in the MLflow registry
+            (e.g. ``"CatheterCSARSurrogate"``).
+        stage:
+            Model stage to prefer: ``"Production"``, ``"Staging"``, or ``None``
+            to load the latest version regardless of stage.
+        tracking_uri:
+            MLflow tracking URI.  Defaults to ``MLFLOW_TRACKING_URI`` env var
+            or ``http://mlflow:5000``.
+        target_dir:
+            Directory to download artifacts into.  Defaults to
+            ``data/surrogate/models/{model_name}/``.
+        """
+        try:
+            import mlflow
+        except ImportError as e:
+            raise RuntimeError("mlflow is required to load from the registry") from e
+
+        uri = tracking_uri or os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+        mlflow.set_tracking_uri(uri)
+        client = mlflow.tracking.MlflowClient()
+
+        # Resolve to a run_id via the registry
+        versions: list[Any] = []
+        if stage and stage not in ("any", "latest"):
+            versions = client.get_latest_versions(model_name, stages=[stage])
+        if not versions:
+            # Fall back to all stages — pick the highest version number
+            versions = client.get_latest_versions(model_name)
+        if not versions:
+            raise ValueError(
+                f"No registered versions found for model '{model_name}'. "
+                "Register a model first: mlflow.register_model(model_uri, model_name)."
+            )
+
+        version = max(versions, key=lambda v: int(v.version))
+        run_id = version.run_id
+        logger.info(
+            "Loading registry model '%s' v%s stage='%s' (run_id=%s)",
+            model_name, version.version, version.current_stage, run_id,
+        )
+
+        cache_key = f"registry__{model_name}__{version.version}"
+        dl_dir = target_dir or (_default_data_root() / MODELS_SUBDIR / cache_key)
+        return cls.load_from_run(run_id, tracking_uri=uri, target_dir=dl_dir)
+
 
 # ---------------------------------------------------------------------------
 # MLflow run listing
 # ---------------------------------------------------------------------------
+
+def list_registered_models(
+    tracking_uri: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Return all registered models and their latest versions from the MLflow Model Registry.
+
+    Parameters
+    ----------
+    tracking_uri:
+        MLflow URI.  Defaults to ``MLFLOW_TRACKING_URI`` env var or
+        ``http://mlflow:5000``.
+
+    Returns
+    -------
+    List of dicts with keys: name, description, tags, latest_versions.
+    Each version has: version, stage, run_id, status.
+    """
+    try:
+        import mlflow
+    except ImportError:
+        return [{"error": "mlflow not installed"}]
+
+    uri = tracking_uri or os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+    try:
+        mlflow.set_tracking_uri(uri)
+        client = mlflow.tracking.MlflowClient()
+        registered = client.search_registered_models()
+        result = []
+        for rm in registered:
+            versions = client.get_latest_versions(rm.name)
+            result.append({
+                "name": rm.name,
+                "description": rm.description or "",
+                "tags": dict(rm.tags),
+                "latest_versions": [
+                    {
+                        "version": v.version,
+                        "stage": v.current_stage,
+                        "run_id": v.run_id,
+                        "status": v.status,
+                    }
+                    for v in versions
+                ],
+            })
+        return result
+    except Exception as exc:
+        logger.warning("Could not list registered models: %s", exc)
+        return [{"error": str(exc)}]
+
 
 def list_mlflow_runs(
     tracking_uri: str | None = None,

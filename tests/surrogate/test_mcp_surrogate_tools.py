@@ -18,9 +18,12 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 from tools import (
+    tool_analyse_catheter_contact,
     tool_compute_csar_from_vtp,
     tool_compute_csar_vs_depth,
     tool_evaluate_contact_pressure,
+    tool_generate_csar_plot_from_vtp,
+    tool_list_available_vtps,
     tool_list_surrogate_models,
     tool_predict_vtp_contact_pressure,
     _to_surrogate_host_path,
@@ -96,8 +99,12 @@ class TestToolListSurrogateModels:
             result = tool_list_surrogate_models()
 
         body = json.loads(result)
-        assert "models" in body
+        # tool_list_surrogate_models returns a summarised view
+        assert "latest_available" in body
         assert body["latest_available"] is True
+        assert "n_runs" in body
+        assert "registered_models" in body
+        assert "recent_runs" in body
 
     def test_http_error_returns_error_json(self):
         with patch("tools._fast_client") as mock_client_cls:
@@ -319,3 +326,197 @@ class TestToolComputeCSARFromVTP:
         body = json.loads(result)
         assert "bands" in body
         assert "n_facets" in body
+
+
+# ---------------------------------------------------------------------------
+# tool_generate_csar_plot_from_vtp
+# ---------------------------------------------------------------------------
+
+class TestToolGenerateCsarPlot:
+    def test_success_returns_host_path(self):
+        resp_data = {
+            "plot_path": "/app/surrogate_data/results/csar_plots/geom_csar_2bands.png",
+            "host_plot_path": "./data/surrogate/results/csar_plots/geom_csar_2bands.png",
+            "plot_png_b64": "abc123",
+            "insertion_depths_mm": [50.0, 100.0],
+            "bands": {},
+            "n_facets": 50,
+            "vtp_source": "/app/surrogate_data/results/geom.vtp",
+        }
+        mock_resp = _mock_response(resp_data)
+        with patch("tools._client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
+
+            result = tool_generate_csar_plot_from_vtp(
+                vtp_path="/app/surrogate_data/results/geom.vtp",
+                z_bands=[{"zmin": 0, "zmax": 50, "label": "tip"},
+                         {"zmin": 50, "zmax": 150, "label": "mid"}],
+                insertion_depths_mm=[50.0, 100.0],
+            )
+
+        body = json.loads(result)
+        assert "host_plot_path" in body
+        assert "bands_summary" in body
+        assert "plot_png_b64" not in body  # large blob should be omitted from summary
+
+    def test_vtp_not_found_returns_error(self):
+        exc = _mock_http_error(404)
+        with patch("tools._client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = exc
+            mock_client_cls.return_value = mock_client
+
+            result = tool_generate_csar_plot_from_vtp(
+                vtp_path="/app/surrogate_data/results/missing.vtp",
+                z_bands=[{"zmin": 0, "zmax": 50, "label": "tip"}],
+            )
+
+        body = json.loads(result)
+        assert "error" in body
+
+
+# ---------------------------------------------------------------------------
+# tool_analyse_catheter_contact
+# ---------------------------------------------------------------------------
+
+class TestToolAnalyseCatheterContact:
+    def _make_band_summary(self, label: str) -> dict:
+        return {
+            "label": label,
+            "zmin_mm": 0.0,
+            "zmax_mm": 50.0,
+            "n_total_facets": 100,
+            "total_area_mm2": 50.0,
+            "peak_csar": 0.45,
+            "depth_at_peak_csar_mm": 200.0,
+            "peak_pressure_MPa": 0.12,
+            "depth_at_peak_pressure_mm": 180.0,
+            "first_contact_depth_mm": 50.0,
+        }
+
+    def test_success_returns_band_summaries(self):
+        resp_data = {
+            "plot_path": "/app/surrogate_data/results/analysis_plots/catheter_contact_analysis.png",
+            "host_plot_path": "./data/surrogate/results/analysis_plots/catheter_contact_analysis.png",
+            "plot_png_b64": "abc123",
+            "insertion_depths_mm": [50.0, 100.0, 150.0],
+            "bands": {},
+            "band_summaries": {
+                "tip": self._make_band_summary("tip"),
+                "mid": self._make_band_summary("mid"),
+            },
+            "n_facets": 200,
+            "vtp_source": "/app/runs/run_001/catheter.vtp",
+        }
+        mock_resp = _mock_response(resp_data)
+        with patch("tools._client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
+
+            result = tool_analyse_catheter_contact(
+                vtp_path="/app/runs/run_001/catheter.vtp",
+                z_bands=[{"zmin": 0, "zmax": 50, "label": "tip"},
+                         {"zmin": 50, "zmax": 150, "label": "mid"}],
+            )
+
+        body = json.loads(result)
+        assert "host_plot_path" in body
+        assert "band_summaries" in body
+        assert "instruction" in body
+        assert "plot_png_b64" not in body
+
+    def test_vtp_not_found_returns_helpful_error(self):
+        exc = _mock_http_error(404)
+        with patch("tools._client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = exc
+            mock_client_cls.return_value = mock_client
+
+            result = tool_analyse_catheter_contact(
+                vtp_path="/app/runs/bad/catheter.vtp",
+                z_bands=[{"zmin": 0, "zmax": 50, "label": "tip"}],
+            )
+
+        body = json.loads(result)
+        assert "error" in body
+        # Should tell the user how to find files
+        assert "list_available_vtps" in body["error"]
+
+    def test_model_unavailable_returns_helpful_error(self):
+        exc = _mock_http_error(503, "model not available")
+        with patch("tools._client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = exc
+            mock_client_cls.return_value = mock_client
+
+            result = tool_analyse_catheter_contact(
+                vtp_path="/app/runs/run_001/catheter.vtp",
+                z_bands=[{"zmin": 0, "zmax": 50, "label": "tip"}],
+            )
+
+        body = json.loads(result)
+        assert "error" in body
+        assert "full_pipeline" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# tool_list_available_vtps
+# ---------------------------------------------------------------------------
+
+class TestToolListAvailableVTPs:
+    def test_success_returns_file_list(self):
+        resp_data = {
+            "vtp_files": [
+                {"path": "/app/runs/run_001/catheter_t0000.vtp",
+                 "host_path": "./runs/run_001/catheter_t0000.vtp",
+                 "size_kb": 12.5, "stem": "catheter_t0000"},
+                {"path": "/app/surrogate_data/results/geom.vtp",
+                 "host_path": "./data/surrogate/results/geom.vtp",
+                 "size_kb": 8.2, "stem": "geom"},
+            ],
+            "total": 2,
+            "search_dirs": ["/app/runs", "/app/surrogate_data"],
+        }
+        mock_resp = _mock_response(resp_data)
+        with patch("tools._fast_client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.get.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
+
+            result = tool_list_available_vtps()
+
+        body = json.loads(result)
+        assert body["total"] == 2
+        assert len(body["vtp_files"]) == 2
+        assert body["vtp_files"][0]["host_path"] == "./runs/run_001/catheter_t0000.vtp"
+
+    def test_empty_result(self):
+        resp_data = {"vtp_files": [], "total": 0, "search_dirs": []}
+        mock_resp = _mock_response(resp_data)
+        with patch("tools._fast_client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.get.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
+
+            result = tool_list_available_vtps()
+
+        body = json.loads(result)
+        assert body["total"] == 0
+        assert body["vtp_files"] == []

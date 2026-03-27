@@ -5,10 +5,13 @@ Tests the FastAPI endpoints using TestClient with mocked surrogate module.
 
 Covered endpoints:
   GET  /api/v1/surrogate/models
+  GET  /api/v1/surrogate/list-vtps
   POST /api/v1/surrogate/predict
   POST /api/v1/surrogate/csar
   POST /api/v1/surrogate/predict-vtp
   POST /api/v1/surrogate/csar-from-vtp
+  POST /api/v1/surrogate/csar-plot-from-vtp
+  POST /api/v1/surrogate/analyse-from-vtp
 """
 from __future__ import annotations
 
@@ -367,3 +370,209 @@ class TestCSARFromVTPEndpoint:
         body = resp.json()
         assert "bands" in body
         assert body["n_facets"] == 2
+
+
+# ---------------------------------------------------------------------------
+# POST /surrogate/csar-plot-from-vtp
+# ---------------------------------------------------------------------------
+
+class TestCSARPlotFromVTPEndpoint:
+    """Tests for the CSAR-plot endpoint."""
+
+    def test_missing_vtp_returns_404(self, client):
+        pred = MagicMock()
+        with (
+            patch("digital_twin_ui.app.api.routes.surrogate.is_model_available",
+                  return_value=True),
+            patch("digital_twin_ui.app.api.routes.surrogate._get_predictor_cached",
+                  return_value=pred),
+            patch("digital_twin_ui.app.api.routes.surrogate._resolve_path",
+                  return_value=Path("/nonexistent/file.vtp")),
+        ):
+            resp = client.post(
+                "/api/v1/surrogate/csar-plot-from-vtp",
+                json={
+                    "vtp_path": "/app/surrogate_data/results/bad.vtp",
+                    "z_bands": [{"zmin": 0, "zmax": 50, "label": "tip"}],
+                },
+            )
+        assert resp.status_code == 404
+
+    def test_model_unavailable_returns_503(self, client):
+        with patch("digital_twin_ui.app.api.routes.surrogate.is_model_available",
+                   return_value=False):
+            resp = client.post(
+                "/api/v1/surrogate/csar-plot-from-vtp",
+                json={
+                    "vtp_path": "/app/surrogate_data/results/geom.vtp",
+                    "z_bands": [{"zmin": 0, "zmax": 50, "label": "tip"}],
+                },
+            )
+        assert resp.status_code == 503
+
+    def test_success_returns_plot_and_data(self, client, tmp_path):
+        from digital_twin_ui.surrogate.vtp_processor import VTPData, VTPProcessor
+
+        vtp_data = VTPData(
+            points=np.array([[0,0,0],[1,0,0],[0,1,0],[0,0,25],[1,0,25],[0,1,25]],
+                            dtype=np.float32),
+            connectivity=np.array([0,1,2, 3,4,5], dtype=np.int32),
+            offsets=np.array([3,6], dtype=np.int32),
+            face_ids=np.array([1,2], dtype=np.int32),
+            areas=np.array([0.5, 0.5], dtype=np.float32),
+            contact_pressure=np.array([0.0, 0.0], dtype=np.float32),
+        )
+        vtp_path = tmp_path / "geom.vtp"
+        VTPProcessor.write(vtp_path, vtp_data)
+
+        pred = MagicMock()
+        pred.predict_at_depth.return_value = np.array([0.1, 0.05], dtype=np.float32)
+
+        with (
+            patch("digital_twin_ui.app.api.routes.surrogate.is_model_available",
+                  return_value=True),
+            patch("digital_twin_ui.app.api.routes.surrogate._get_predictor_cached",
+                  return_value=pred),
+            patch("digital_twin_ui.app.api.routes.surrogate._resolve_path",
+                  return_value=vtp_path),
+            patch("digital_twin_ui.app.api.routes.surrogate._SURROGATE_DATA_ROOT",
+                  tmp_path),
+        ):
+            resp = client.post(
+                "/api/v1/surrogate/csar-plot-from-vtp",
+                json={
+                    "vtp_path": str(vtp_path),
+                    "z_bands": [{"zmin": -5, "zmax": 5, "label": "lower"},
+                                {"zmin": 20, "zmax": 30, "label": "upper"}],
+                    "insertion_depths_mm": [50.0, 100.0],
+                },
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "bands" in body
+        assert "plot_png_b64" in body
+        assert len(body["plot_png_b64"]) > 0
+        assert body["n_facets"] == 2
+
+
+# ---------------------------------------------------------------------------
+# POST /surrogate/analyse-from-vtp
+# ---------------------------------------------------------------------------
+
+class TestAnalyseContactFromVTPEndpoint:
+    """Tests for the combined contact analysis endpoint."""
+
+    def test_missing_vtp_returns_404(self, client):
+        pred = MagicMock()
+        with (
+            patch("digital_twin_ui.app.api.routes.surrogate.is_model_available",
+                  return_value=True),
+            patch("digital_twin_ui.app.api.routes.surrogate._get_predictor_cached",
+                  return_value=pred),
+            patch("digital_twin_ui.app.api.routes.surrogate._resolve_path",
+                  return_value=Path("/nonexistent/file.vtp")),
+        ):
+            resp = client.post(
+                "/api/v1/surrogate/analyse-from-vtp",
+                json={
+                    "vtp_path": "/app/runs/run_bad/catheter.vtp",
+                    "z_bands": [{"zmin": 0, "zmax": 50, "label": "tip"}],
+                },
+            )
+        assert resp.status_code == 404
+
+    def test_success_returns_combined_analysis(self, client, tmp_path):
+        from digital_twin_ui.surrogate.vtp_processor import VTPData, VTPProcessor
+
+        vtp_data = VTPData(
+            points=np.array([[0,0,0],[1,0,0],[0,1,0],[0,0,25],[1,0,25],[0,1,25]],
+                            dtype=np.float32),
+            connectivity=np.array([0,1,2, 3,4,5], dtype=np.int32),
+            offsets=np.array([3,6], dtype=np.int32),
+            face_ids=np.array([1,2], dtype=np.int32),
+            areas=np.array([0.5, 0.5], dtype=np.float32),
+            contact_pressure=np.array([0.0, 0.0], dtype=np.float32),
+        )
+        vtp_path = tmp_path / "catheter.vtp"
+        VTPProcessor.write(vtp_path, vtp_data)
+
+        pred = MagicMock()
+        pred.predict_at_depth.return_value = np.array([0.2, 0.0], dtype=np.float32)
+
+        with (
+            patch("digital_twin_ui.app.api.routes.surrogate.is_model_available",
+                  return_value=True),
+            patch("digital_twin_ui.app.api.routes.surrogate._get_predictor_cached",
+                  return_value=pred),
+            patch("digital_twin_ui.app.api.routes.surrogate._resolve_path",
+                  return_value=vtp_path),
+            patch("digital_twin_ui.app.api.routes.surrogate._SURROGATE_DATA_ROOT",
+                  tmp_path),
+        ):
+            resp = client.post(
+                "/api/v1/surrogate/analyse-from-vtp",
+                json={
+                    "vtp_path": str(vtp_path),
+                    "z_bands": [{"zmin": -5, "zmax": 5, "label": "lower"},
+                                {"zmin": 20, "zmax": 30, "label": "upper"}],
+                    "insertion_depths_mm": [50.0, 100.0, 150.0],
+                },
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "bands" in body
+        assert "band_summaries" in body
+        assert "plot_png_b64" in body
+        assert len(body["plot_png_b64"]) > 0
+        assert "lower" in body["band_summaries"] or "upper" in body["band_summaries"]
+        assert body["n_facets"] == 2
+
+
+# ---------------------------------------------------------------------------
+# GET /surrogate/list-vtps
+# ---------------------------------------------------------------------------
+
+class TestListVTPFilesEndpoint:
+    """Tests for the VTP file discovery endpoint."""
+
+    def test_returns_200(self, client):
+        with (
+            patch("digital_twin_ui.app.api.routes.surrogate._RUNS_ROOT",
+                  Path("/nonexistent")),
+            patch("digital_twin_ui.app.api.routes.surrogate._SURROGATE_DATA_ROOT",
+                  Path("/nonexistent")),
+        ):
+            resp = client.get("/api/v1/surrogate/list-vtps")
+        assert resp.status_code == 200
+
+    def test_finds_vtp_files(self, client, tmp_path):
+        from digital_twin_ui.surrogate.vtp_processor import VTPData, VTPProcessor
+
+        # Write two VTP files in different subdirs
+        vtp_data = VTPData(
+            points=np.array([[0,0,0],[1,0,0],[0,1,0]], dtype=np.float32),
+            connectivity=np.array([0,1,2], dtype=np.int32),
+            offsets=np.array([3], dtype=np.int32),
+            face_ids=np.array([1], dtype=np.int32),
+            areas=np.array([0.5], dtype=np.float32),
+            contact_pressure=np.array([0.0], dtype=np.float32),
+        )
+        (tmp_path / "run_001").mkdir()
+        VTPProcessor.write(tmp_path / "run_001" / "catheter_t0000.vtp", vtp_data)
+        VTPProcessor.write(tmp_path / "catheter_t0001.vtp", vtp_data)
+
+        with (
+            patch("digital_twin_ui.app.api.routes.surrogate._RUNS_ROOT", tmp_path),
+            patch("digital_twin_ui.app.api.routes.surrogate._SURROGATE_DATA_ROOT",
+                  Path("/nonexistent")),
+        ):
+            resp = client.get("/api/v1/surrogate/list-vtps")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+        stems = {f["stem"] for f in body["vtp_files"]}
+        assert "catheter_t0000" in stems
+        assert "catheter_t0001" in stems
