@@ -283,13 +283,36 @@ JUPYTER_TOKEN=your-secure-token
 | `notebooks/full_pipeline.ipynb` | **Start here.** Discover `.xplt` results → extract surrogate data → build CSV → train → evaluate → deploy |
 | `notebooks/retraining.ipynb` | **Incremental retraining.** Append new simulation results and retrain; only deploys if the new model is better |
 
+### Using pre-run simulation results (manual / external sims)
+
+Drop your `.feb` and `.xplt` files into the `solved_simulations/` folder at the repo root. The Jupyter container mounts this folder at `/workspace/manual_sims` and the `full_pipeline` notebook reads it automatically — no notebook edits required.
+
+```
+simulation-api-tool/
+└── solved_simulations/      ← copy your .feb + .xplt files here
+    ├── my_run.feb
+    └── my_run.xplt
+```
+
+Files can be placed **flat** (directly in `solved_simulations/`) or in **sub-folders** (one folder per run — batch mode).
+
+> **To change this path later**, update `MANUAL_SIMS_HOST_PATH` in **two places**:
+> 1. `.env` — used by Docker Compose for bind-mount path resolution (volume substitution)
+> 2. `.env.librechat` — used as container runtime env vars in the LibreChat stack
+>
+> Both files must match, otherwise the mount silently falls back to an empty directory.
+> After changing the path, recreate the Jupyter container:
+> ```bash
+> docker compose -f docker-compose.librechat.yml up -d --force-recreate jupyter
+> ```
+
 ### Training workflow (full pipeline)
 
-1. Run FEBio simulations (via the agent) to generate `.xplt` result files in `runs/`
+1. Run FEBio simulations (via the agent) to generate `.xplt` result files in `runs/`, **or** copy external results into `solved_simulations/`
 2. Open JupyterLab at `http://localhost:8888?token=dtui-jupyter`
 3. Open `notebooks/full_pipeline.ipynb` and run all cells top to bottom
 4. The notebook:
-   - Discovers `.xplt` files in `runs/`
+   - Discovers `.xplt` files in `runs/` or `solved_simulations/`
    - Extracts per-facet contact pressure data using **xplt-parser**
    - Builds and saves `data/surrogate/training/combined.csv`
    - Exports `data/surrogate/training/reference_facets.csv` (geometry for CSAR endpoint)

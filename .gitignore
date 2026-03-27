@@ -15,6 +15,8 @@ build/
 # Runtime output
 runs/*
 !runs/.gitkeep
+solved_simulations/*
+!solved_simulations/.gitkeep
 logs/
 mlruns/
 data/raw/
